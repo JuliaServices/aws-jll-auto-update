@@ -77,7 +77,8 @@ jobs:
           git checkout -b update-versions-$LIBRARY-$LV
           git add .
           git commit -m "$LIBRARY upgraded to ${LV}"
-          git push -f origin update-versions-$LIBRARY-$LV
+          git push -f https://github.com/quinnj2/Yggdrasil update-versions-$LIBRARY-$LV
           gh pr create --title "Automated update of $LIBRARY to version ${LV}" \
-            --body "This PR updates $LIBRARY to version ${LV}. cc: @quinnj @Octogonapus"
+            --body "This PR updates $LIBRARY to version ${LV}. cc: @quinnj @Octogonapus" \
+            --repo quinnj2/Yggdrasil --base master
         fi

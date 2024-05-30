@@ -21,7 +21,6 @@ jobs:
         token: ${{ secrets.PAT }}
 
     - name: Check latest release version
-      id: latest-release
       run: |
         LIBRARY=${{ matrix.library }}
         if [[ "$LIBRARY" == "s2n_tls" ]]; then
@@ -40,14 +39,22 @@ jobs:
         echo "LATEST_SHA=$LATEST_SHA" >> $GITHUB_ENV
         echo "LATEST_VERSION=$LATEST_VERSION, LATEST_SHA=$LATEST_SHA"
 
-    - name: Parse current version in build_tarballs.jl
-      id: current-version
+    - name: Parse current version and sha in build_tarballs.jl
       run: |
         LIBRARY=${{ matrix.library }}
         LIBRARY_DIR=$(echo "${LIBRARY:0:1}" | tr '[:lower:]' '[:upper:]')/${LIBRARY}
         CURRENT_VERSION=$(grep -oP -m 1 '(?<=version = v")[^"]+' $LIBRARY_DIR/build_tarballs.jl | sed 's/^v//')
         echo "CURRENT_VERSION=${CURRENT_VERSION}" >> $GITHUB_ENV
         echo "CURRENT_VERSION=${CURRENT_VERSION}"
+        if [[ "$LIBRARY" == "s2n_tls" ]]; then
+          OWNER="aws"
+        else
+          OWNER="awslabs"
+        fi
+        REPO="$OWNER/$(echo "$LIBRARY" | tr '_' '-')" # Replace '_' with '-'
+        CURRENT_SHA=$(grep -oP -m 1 '(?<=GitSource\("https://github.com/'${REPO//\//\\/}'.git", ")[a-f0-9]{40}' $LIBRARY_DIR/build_tarballs.jl)
+        echo "CURRENT_SHA=${CURRENT_SHA}" >> $GITHUB_ENV
+        echo "CURRENT_SHA=${CURRENT_SHA}"
 
     - name: Compare versions and update if necessary
       if: env.LATEST_VERSION != env.CURRENT_VERSION
@@ -61,7 +68,7 @@ jobs:
         fi
         REPO="$OWNER/$(echo "$LIBRARY" | tr '_' '-')" # Replace '_' with '-'
         sed -i "s/version = v\"${CURRENT_VERSION}\"/version = v\"${LATEST_VERSION}\"/" $LIBRARY_DIR/build_tarballs.jl
-        sed -i -r "s#(GitSource\(\"https://github.com/${REPO}.git\", \")[a-f0-9]{40}(\"\))#\1${LATEST_SHA}\2#" $LIBRARY_DIR/build_tarballs.jl
+        sed -i "s#${CURRENT_SHA}#${LATEST_SHA}#" $LIBRARY_DIR/build_tarballs.jl
         git config --global user.name 'github-actions'
         git config --global user.email 'github-actions@github.com'
         git checkout -b update-versions-$LIBRARY-${LATEST_VERSION}

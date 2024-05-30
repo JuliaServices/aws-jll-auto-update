@@ -35,7 +35,7 @@ jobs:
         RELEASES=$(curl -L https://api.github.com/repos/${REPO}/git/refs/tags)
         # Parse and sort the versions to get the highest version
         LATEST_VERSION=$(echo $RELEASES | jq -r '.[] | select(.ref | test("refs/tags/v")) | .ref' | sed 's/refs\/tags\/v//' | sort -V | tail -n 1)
-        LATEST_SHA=$(echo $RELEASES | jq -r --arg LATEST_VERSION "refs/tags/$LATEST_VERSION" '.[] | select(.ref == $LATEST_VERSION) | .object.sha')
+        LATEST_SHA=$(echo $RELEASES | jq -r --arg LATEST_VERSION "refs/tags/v$LATEST_VERSION" '.[] | select(.ref == $LATEST_VERSION) | .object.sha')
         echo "LATEST_VERSION=${LATEST_VERSION}" >> $GITHUB_ENV
         echo "LATEST_SHA=$LATEST_SHA" >> $GITHUB_ENV
         echo "LATEST_VERSION=$LATEST_VERSION, LATEST_SHA=$LATEST_SHA"
@@ -50,7 +50,7 @@ jobs:
         echo "CURRENT_VERSION=${CURRENT_VERSION}"
 
     - name: Compare versions and update if necessary
-      if: ${{ env.LATEST_VERSION }} != ${{ env.CURRENT_VERSION }}
+      if: env.LATEST_VERSION != env.CURRENT_VERSION
       run: |
         LIBRARY=${{ matrix.library }}
         LIBRARY_DIR=$(echo "${LIBRARY:0:1}" | tr '[:lower:]' '[:upper:]')/${LIBRARY}
@@ -71,14 +71,14 @@ jobs:
 
     - name: Checkout fork
       uses: actions/checkout@v4
-      if: ${{ env.LATEST_VERSION }} != ${{ env.CURRENT_VERSION }}
+      if: env.LATEST_VERSION != env.CURRENT_VERSION
       with:
         ref: update-versions-${{ matrix.library }}-${{ env.LATEST_VERSION }}
         repository: quinnj2/Yggdrasil
         token: ${{ secrets.PAT }}
 
     # - name: Create a PR
-    #   if: ${{ env.LATEST_VERSION }} != ${{ env.CURRENT_VERSION }}
+    #   if: env.LATEST_VERSION != env.CURRENT_VERSION
     #   env:
     #     GH_TOKEN: ${{ secrets.PAT }}
     #   run: |

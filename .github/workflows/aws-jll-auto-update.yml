@@ -83,7 +83,7 @@ jobs:
     - name: Checkout fork
       uses: actions/checkout@v4
       with:
-        ref: update-versions-${{ matrix.library }}-${LATEST_VERSION}
+        ref: update-versions-${{ matrix.library }}-${{ env.LATEST_VERSION }}
         repository: quinnj2/Yggdrasil
         token: ${{ secrets.PAT }}
 

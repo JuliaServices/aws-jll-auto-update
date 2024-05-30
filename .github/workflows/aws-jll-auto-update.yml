@@ -84,11 +84,11 @@ jobs:
         repository: quinnj2/Yggdrasil
         token: ${{ secrets.PAT }}
 
-    # - name: Create a PR
-    #   if: env.LATEST_VERSION != env.CURRENT_VERSION
-    #   env:
-    #     GH_TOKEN: ${{ secrets.PAT }}
-    #   run: |
-    #     gh pr create --title "[${{ matrix.library }}] Update to version ${LATEST_VERSION}" \
-    #       --body "This PR updates ${{ matrix.library }} to version ${LATEST_VERSION}. cc: @quinnj @Octogonapus" \
-    #       --repo JuliaPackaging/Yggdrasil --base master
+    - name: Create a PR
+      if: env.LATEST_VERSION != env.CURRENT_VERSION
+      env:
+        GH_TOKEN: ${{ secrets.PAT }}
+      run: |
+        gh pr create --title "[${{ matrix.library }}] Update to version ${LATEST_VERSION}" \
+          --body "This PR updates ${{ matrix.library }} to version ${LATEST_VERSION}. cc: @quinnj @Octogonapus" \
+          --repo JuliaPackaging/Yggdrasil --base master

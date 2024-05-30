@@ -52,8 +52,6 @@ jobs:
 
     - name: Compare versions and update if necessary
       id: compare-versions
-      env:
-        GH_TOKEN: ${{ secrets.PAT }}
       run: |
         LIBRARY=${{ matrix.library }}
         LIBRARY_DIR=$(echo "${LIBRARY:0:1}" | tr '[:lower:]' '[:upper:]')/${LIBRARY}
@@ -84,6 +82,8 @@ jobs:
 
     - name: Create a PR
       if: ${{ env.LATEST_VERSION }} != ${{ env.CURRENT_VERSION }}
+      env:
+        GH_TOKEN: ${{ secrets.PAT }}
       run: |
         gh pr create --title "Automated update of $LIBRARY to version ${LATEST_VERSION}" \
           --body "This PR updates $LIBRARY to version ${LATEST_VERSION}. cc: @quinnj @Octogonapus" \

@@ -31,7 +31,8 @@ jobs:
         REPO="$OWNER/$(echo "$LIBRARY" | tr '_' '-')" # Replace '_' with '-'
         echo "REPO=$REPO"
          # Get the tags
-        RELEASES=$(curl -L https://api.github.com/repos/${REPO}/git/refs/tags)
+        RELEASES=$(curl --retry 5 -L https://api.github.com/repos/${REPO}/git/refs/tags)
+        echo "RELEASES=$RELEASES"
         # Parse and sort the versions to get the highest version
         LATEST_VERSION=$(echo $RELEASES | jq -r '.[] | select(.ref | test("refs/tags/v")) | .ref' | sed 's/refs\/tags\/v//' | sort -V | tail -n 1)
         LATEST_SHA=$(echo $RELEASES | jq -r --arg LATEST_VERSION "refs/tags/v$LATEST_VERSION" '.[] | select(.ref == $LATEST_VERSION) | .object.sha')

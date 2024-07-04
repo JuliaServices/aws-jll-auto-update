@@ -75,7 +75,7 @@ jobs:
         git checkout -b update-versions-$LIBRARY-${LATEST_VERSION}
         git add .
         git commit -m "[$LIBRARY] Update to ${LATEST_VERSION}"
-        git push -f https://github.com/quinnj2/Yggdrasil update-versions-$LIBRARY-${LATEST_VERSION}
+        git push https://github.com/quinnj2/Yggdrasil update-versions-$LIBRARY-${LATEST_VERSION}
 
     - name: Checkout fork
       uses: actions/checkout@v4

@@ -1,0 +1,83 @@
+name: Auto update AWS LibAwsX packages
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Run every hour
+  workflow_dispatch:
+
+jobs:
+  update-aws-packages:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # library: [["LibAwsCommon","aws_c_common"],["LibAwsAuth","aws_c_auth"],["LibAwsCompression","aws_c_compression"],["LibAwsEventStream","aws_c_event_stream"],["LibAwsHTTP","aws_c_http"],["LibAwsIO","aws_c_io"],["LibAwsIot","aws_c_iot"],["LibAwsMQTT","aws_c_mqtt"],["LibAwsMQTT","aws_c_s3"],["LibAwsSdkutils","aws_c_sdkutils"],["LibAwsChecksums","aws_checksums"]]
+        library: [["LibAwsCommon","aws_c_common"]]
+    steps:
+    - name: Checkout Yggdrasil repository
+      uses: actions/checkout@v4
+      with:
+        ref: master
+        repository: JuliaPackaging/Yggdrasil
+        path: yggdrasil
+        token: ${{ secrets.PAT }}
+
+    - name: Checkout LibAwsX repository
+      uses: actions/checkout@v4
+      with:
+        repository: JuliaServices/${{ matrix.library[0] }}
+        path: libawsx
+        token: ${{ secrets.PAT }}
+
+    - name: Parse current version in build_tarballs.jl
+      run: |
+        LIBRARY=${{ matrix.library[1] }}
+        LIBRARY_DIR=$(echo "${LIBRARY:0:1}" | tr '[:lower:]' '[:upper:]')/${LIBRARY}
+        YGGDRASIL_VERSION=$(grep -oP -m 1 '(?<=version = v")[^"]+' yggdrasil/$LIBRARY_DIR/build_tarballs.jl | sed 's/^v//')
+        echo "YGGDRASIL_VERSION=${YGGDRASIL_VERSION}" >> $GITHUB_ENV
+        echo "YGGDRASIL_VERSION=${CURRENT_VERSION}"
+
+    - name: Parse JLL version in Project.toml
+      run: |
+        LIBRARY=${{ matrix.library[1] }}
+        JLL_NAME="${LIBRARY}_jll"
+        PROJECT_VERSION=$(grep -oP -m 1 "(?<=${JLL_NAME} = \")[^\"]+" libawsx/Project.toml | sed 's/^=//')
+        echo "PROJECT_VERSION=${PROJECT_VERSION}" >> $GITHUB_ENV
+        echo "PROJECT_VERSION=${PROJECT_VERSION}"
+
+    - name: Check for need to update, re-generate bindings, PR
+      run: |
+          LIBRARY=${{ matrix.library[1] }}
+          JLL_NAME="${LIBRARY}_jll"
+          # Compare versions
+          if [[ "$YGGDRASIL_VERSION" != "$CURRENT_VERSION" ]]; then
+            echo "New version found for $JLL_NAME: $YGGDRASIL_VERSION"
+
+            # Check for existing PR
+            PR_EXISTS=$(gh pr list --repo JuliaServices/${{ matrix.library[0] }} --search "Update ${JLL_NAME} to version ${YGGDRASIL_VERSION}" --json title --jq '.[0].title')
+            if [[ -n "$PR_EXISTS" ]]; then
+              echo "PR with the same title already exists. Skipping PR creation."
+              exit 0
+            fi
+
+            # Update Project.toml
+            sed -i "s/${JLL_NAME} = \"=$CURRENT_VERSION\"/${JLL_NAME} = \"=$YGGDRASIL_VERSION\"/" libawsx/Project.toml
+
+            # Bump version number in gen/Project.toml
+            sed -i "s/${JLL_NAME} = \"$CURRENT_VERSION\"/${JLL_NAME} = \"$YGGDRASIL_VERSION\"/" libawsx/gen/Project.toml
+            libawsx/gen/generate.sh
+
+            # Commit and push changes
+            cd libawsx
+            git config --global user.name 'github-actions'
+            git config --global user.email 'github-actions@github.com'
+            git add .
+            git commit -m "Update ${JLL_NAME} to version ${YGGDRASIL_VERSION}"
+            git push origin update-${JLL_NAME}-${YGGDRASIL_VERSION}
+
+            # Create a PR
+            gh pr create --title "Update ${JLL_NAME} to version ${YGGDRASIL_VERSION}" \
+              --body "This PR updates ${JLL_NAME} to version ${YGGDRASIL_VERSION}. cc: @quinnj, @Octogonapus" \
+              --repo JuliaServices/${{ matrix.library[0] }} --base main
+          else
+            echo "$JLL_NAME is up to date"
+          fi

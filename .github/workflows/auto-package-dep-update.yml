@@ -16,6 +16,9 @@ jobs:
         # library: [["LibAwsCommon","aws_c_common"],["LibAwsAuth","aws_c_auth"],["LibAwsCompression","aws_c_compression"],["LibAwsEventStream","aws_c_event_stream"],["LibAwsHTTP","aws_c_http"],["LibAwsIO","aws_c_io"],["LibAwsIot","aws_c_iot"],["LibAwsMQTT","aws_c_mqtt"],["LibAwsMQTT","aws_c_s3"],["LibAwsSdkutils","aws_c_sdkutils"],["LibAwsChecksums","aws_checksums"]]
         library: [["LibAwsCommon","aws_c_common"]]
     steps:
+    - uses: julia-actions/setup-julia@v1
+      with:
+        version: "1.10.2"
     - name: Checkout Yggdrasil repository
       uses: actions/checkout@v4
       with:

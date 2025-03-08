@@ -62,6 +62,15 @@ jobs:
       run: |
         LIBRARY=${{ matrix.library }}
         LIBRARY_DIR=$(echo "${LIBRARY:0:1}" | tr '[:lower:]' '[:upper:]')/${LIBRARY}
+        BRANCH_NAME="update-versions-$LIBRARY-${LATEST_VERSION}"
+
+        # Check if the branch already exists in quinnj2/Yggdrasil
+        if git ls-remote --exit-code --heads https://github.com/quinnj2/Yggdrasil.git $BRANCH_NAME; then
+          echo "Branch $BRANCH_NAME already exists. Skipping push."
+          echo "SKIP_PUSH=true" >> $GITHUB_ENV
+          exit 0
+        fi
+
         if [[ "$LIBRARY" == "s2n_tls" ]]; then
           OWNER="aws"
         else
@@ -70,23 +79,24 @@ jobs:
         REPO="$OWNER/$(echo "$LIBRARY" | tr '_' '-')" # Replace '_' with '-'
         sed -i "s/version = v\"${CURRENT_VERSION}\"/version = v\"${LATEST_VERSION}\"/" $LIBRARY_DIR/build_tarballs.jl
         sed -i "s#${CURRENT_SHA}#${LATEST_SHA}#" $LIBRARY_DIR/build_tarballs.jl
+
         git config --global user.name 'github-actions'
         git config --global user.email 'github-actions@github.com'
-        git checkout -b update-versions-$LIBRARY-${LATEST_VERSION}
+        git checkout -b $BRANCH_NAME
         git add .
         git commit -m "[$LIBRARY] Update to ${LATEST_VERSION}"
-        git push https://github.com/quinnj2/Yggdrasil update-versions-$LIBRARY-${LATEST_VERSION}
+        git push https://github.com/quinnj2/Yggdrasil $BRANCH_NAME
 
     - name: Checkout fork
       uses: actions/checkout@v4
-      if: env.LATEST_VERSION != env.CURRENT_VERSION
+      if: env.LATEST_VERSION != env.CURRENT_VERSION && env.SKIP_PUSH != 'true'
       with:
         ref: update-versions-${{ matrix.library }}-${{ env.LATEST_VERSION }}
         repository: quinnj2/Yggdrasil
         token: ${{ secrets.PAT }}
 
     - name: Create a PR
-      if: env.LATEST_VERSION != env.CURRENT_VERSION
+      if: env.LATEST_VERSION != env.CURRENT_VERSION && env.SKIP_PUSH != 'true'
       env:
         GH_TOKEN: ${{ secrets.PAT }}
       run: |

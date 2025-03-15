@@ -13,8 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # library: [["LibAwsCommon","aws_c_common"],["LibAwsAuth","aws_c_auth"],["LibAwsCompression","aws_c_compression"],["LibAwsEventStream","aws_c_event_stream"],["LibAwsHTTP","aws_c_http"],["LibAwsIO","aws_c_io"],["LibAwsIot","aws_c_iot"],["LibAwsMQTT","aws_c_mqtt"],["LibAwsMQTT","aws_c_s3"],["LibAwsSdkutils","aws_c_sdkutils"],["LibAwsChecksums","aws_checksums"]]
-        library: [["LibAwsCommon.jl","aws_c_common","aws_c_common_jll.jl"]]
+        library: [["LibAwsCommon.jl","aws_c_common","aws_c_common_jll.jl"],["LibAwsCal.jl","aws_c_cal","aws_c_cal_jll.jl"],["LibAwsCompression.jl","aws_c_compression","aws_c_compression_jll.jl"],["LibAwsSdkutils.jl","aws_c_sdkutils","aws_c_sdkutils_jll.jl"],["LibAwsChecksums.jl","aws_checksums","aws_checksums_jll.jl"]]
     steps:
     - uses: julia-actions/setup-julia@v2
       with:

@@ -91,8 +91,10 @@ jobs:
             #   exit 0
             # fi
 
-            # Update Project.toml jll version number
+            # Update Project.toml jll compat version number
             sed -i "s/${JLL_NAME} = \"=$PROJECT_VERSION\"/${JLL_NAME} = \"=$JLL_VERSION\"/" libawsx/Project.toml
+            # Update gen/Project.toml jll compat version number (this kicks off the generate bindings action when we make the PR)
+            sed -i "s/${JLL_NAME} = \"=$PROJECT_VERSION\"/${JLL_NAME} = \"=$JLL_VERSION\"/" libawsx/gen/Project.toml
             # Update Project.toml version number
             # Extract current package version from libawsx/Project.toml
             CURRENT_LIBAWSX_VERSION=$(grep -oP -m 1 '(?<=version = ")[^"]+' libawsx/Project.toml)
@@ -102,9 +104,6 @@ jobs:
             NEW_LIBAWSX_VERSION=$(echo $CURRENT_LIBAWSX_VERSION | awk -F. '{print $1"."$2"."'"$PATCH"'}')
             echo "New LibAwsX Version: $NEW_LIBAWSX_VERSION"
             sed -i "s/version = \"$CURRENT_LIBAWSX_VERSION\"/version = \"$NEW_LIBAWSX_VERSION\"/" libawsx/Project.toml
-
-            # regenerate bindings
-            libawsx/gen/generate.sh
 
             # Commit and push changes
             cd libawsx

@@ -111,7 +111,7 @@ jobs:
             git config --global user.email 'github-actions@github.com'
             git checkout -b $BRANCH_NAME
             git add .
-            git commit -m "Update ${JLL_NAME} to version ${JLL_VERSION}"
+            git commit -m "Update ${JLL_NAME} jll dependency to version ${JLL_VERSION}"
             git push --force https://github.com/quinnj2/${{ matrix.library[0] }} $BRANCH_NAME
             echo "MAKE_PR=true" >> $GITHUB_ENV
           else

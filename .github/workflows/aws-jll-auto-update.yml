@@ -23,7 +23,10 @@ jobs:
     - name: Check latest release version
       run: |
         LIBRARY=${{ matrix.library }}
-        if [[ "$LIBRARY" == "s2n_tls" ]]; then
+        # awc_c_http_jq is a special case
+        if [[ "$LIBRARY" == "aws_c_http_jq" ]]; then
+          OWNER="quinnj"
+        elif [[ "$LIBRARY" == "s2n_tls" ]]; then
           OWNER="aws"
         else
           OWNER="awslabs"

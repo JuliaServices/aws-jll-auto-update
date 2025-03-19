@@ -20,21 +20,23 @@ jobs:
         repository: JuliaPackaging/Yggdrasil
         token: ${{ secrets.PAT }}
 
+    - name: compute full repo name
+      run: |
+        LIBRARY=${{ matrix.library }}
+        if [[ "$LIBRARY" == "aws_c_http_jq" ]]; then
+          REPO="quinnj/aws-c-http"
+        elif [[ "$LIBRARY" == "s2n_tls" ]]; then
+          REPO="aws/s2n-tls"
+        else
+          REPO="awslabs/$(echo "$LIBRARY" | tr '_' '-')"
+        fi
+        echo "REPO=$REPO" >> $GITHUB_ENV
+
     - name: Check latest release version
       run: |
         LIBRARY=${{ matrix.library }}
-        # awc_c_http_jq is a special case
-        if [[ "$LIBRARY" == "aws_c_http_jq" ]]; then
-          OWNER="quinnj"
-        elif [[ "$LIBRARY" == "s2n_tls" ]]; then
-          OWNER="aws"
-        else
-          OWNER="awslabs"
-        fi
-        REPO="$OWNER/$(echo "$LIBRARY" | tr '_' '-')" # Replace '_' with '-'
-        echo "REPO=$REPO"
          # Get the tags
-        RELEASES=$(curl --retry 5 -L -H "Authorization: token ${{ secrets.PAT }}" https://api.github.com/repos/${REPO}/git/refs/tags)
+        RELEASES=$(curl --retry 5 -L -H "Authorization: token ${{ secrets.PAT }}" https://api.github.com/repos/${{ env.REPO }}/git/refs/tags)
         echo "RELEASES=$RELEASES"
         # Parse and sort the versions to get the highest version
         LATEST_VERSION=$(echo $RELEASES | jq -r '.[] | select(.ref | test("refs/tags/v")) | .ref' | sed 's/refs\/tags\/v//' | sort -V | tail -n 1)
@@ -50,12 +52,7 @@ jobs:
         CURRENT_VERSION=$(grep -oP -m 1 '(?<=version = v")[^"]+' $LIBRARY_DIR/build_tarballs.jl | sed 's/^v//')
         echo "CURRENT_VERSION=${CURRENT_VERSION}" >> $GITHUB_ENV
         echo "CURRENT_VERSION=${CURRENT_VERSION}"
-        if [[ "$LIBRARY" == "s2n_tls" ]]; then
-          OWNER="aws"
-        else
-          OWNER="awslabs"
-        fi
-        REPO="$OWNER/$(echo "$LIBRARY" | tr '_' '-')" # Replace '_' with '-'
+        REPO=${{ env.REPO }}
         CURRENT_SHA=$(grep -oP -m 1 '(?<=GitSource\("https://github.com/'${REPO//\//\\/}'.git", ")[a-f0-9]{40}' $LIBRARY_DIR/build_tarballs.jl)
         echo "CURRENT_SHA=${CURRENT_SHA}" >> $GITHUB_ENV
         echo "CURRENT_SHA=${CURRENT_SHA}"
@@ -74,12 +71,6 @@ jobs:
           exit 0
         fi
 
-        if [[ "$LIBRARY" == "s2n_tls" ]]; then
-          OWNER="aws"
-        else
-          OWNER="awslabs"
-        fi
-        REPO="$OWNER/$(echo "$LIBRARY" | tr '_' '-')" # Replace '_' with '-'
         sed -i "s/version = v\"${CURRENT_VERSION}\"/version = v\"${LATEST_VERSION}\"/" $LIBRARY_DIR/build_tarballs.jl
         sed -i "s#${CURRENT_SHA}#${LATEST_SHA}#" $LIBRARY_DIR/build_tarballs.jl
 

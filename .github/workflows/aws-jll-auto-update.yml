@@ -74,6 +74,10 @@ jobs:
         sed -i "s/version = v\"${CURRENT_VERSION}\"/version = v\"${LATEST_VERSION}\"/" $LIBRARY_DIR/build_tarballs.jl
         sed -i "s#${CURRENT_SHA}#${LATEST_SHA}#" $LIBRARY_DIR/build_tarballs.jl
 
+        # ------ Update compat bounds in any other build_tarballs.jl that depend on this JLL ------
+        DEP_JLL="${LIBRARY}_jll"
+        find . -name "build_tarballs.jl" -type f -print0 | xargs -0 sed -i -E "s/(Dependency\\(\"${DEP_JLL}\";[[:space:]]*compat=\")([0-9]+\.[0-9]+\.[0-9]+)(\")/\\1${LATEST_VERSION}\\3/"
+
         git config --global user.name 'github-actions'
         git config --global user.email 'github-actions@github.com'
         git checkout -b $BRANCH_NAME

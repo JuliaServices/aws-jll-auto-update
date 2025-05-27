@@ -127,11 +127,12 @@ end
 if abspath(PROGRAM_FILE) == @__FILE__
     if length(ARGS) == 0
         println("Usage:")
-        println("  julia jll-version-manager.jl update-deps <file>           # Update dependencies in a build_tarballs.jl file")
-        println("  julia jll-version-manager.jl get-version <package>       # Get cached version of a package")
-        println("  julia jll-version-manager.jl update-version <package> <version>  # Update a specific package version")
+        println("  julia jll-version-manager.jl update-deps <file> [versions_file]  # Update dependencies in a build_tarballs.jl file")
+        println("  julia jll-version-manager.jl get-version <package>              # Get cached version of a package")
+        println("  julia jll-version-manager.jl update-version <package> <version> # Update a specific package version")
     elseif ARGS[1] == "update-deps" && length(ARGS) >= 2
-        update_dependencies_in_file(ARGS[2])
+        versions_file = length(ARGS) >= 3 ? ARGS[3] : "jll-versions.json"
+        update_dependencies_in_file(ARGS[2], versions_file)
     elseif ARGS[1] == "get-version" && length(ARGS) >= 2
         version = get_jll_version(ARGS[2])
         if version !== nothing

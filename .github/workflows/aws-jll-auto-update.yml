@@ -112,12 +112,13 @@ jobs:
 
         # Update dependencies in this library's build_tarballs.jl to use latest versions
         echo "Updating dependencies for $LIBRARY to latest versions..."
-        julia --project=jll-dir jll-dir/jll-version-manager.jl update-deps $LIBRARY_DIR/build_tarballs.jl
+        julia --project=jll-dir jll-dir/jll-version-manager.jl update-deps $LIBRARY_DIR/build_tarballs.jl jll-dir/jll-versions.json
 
         git config --global user.name 'github-actions'
         git config --global user.email 'github-actions@github.com'
         git checkout -b $BRANCH_NAME
-        git add .
+        # Only add the build_tarballs.jl file, not the entire directory (which includes jll-dir)
+        git add $LIBRARY_DIR/build_tarballs.jl
         git commit -m "[$LIBRARY] Update to ${LATEST_VERSION} with latest dependency versions"
         git push https://github.com/quinnj2/Yggdrasil $BRANCH_NAME
 

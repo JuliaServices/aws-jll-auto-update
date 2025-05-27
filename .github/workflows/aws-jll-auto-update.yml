@@ -126,7 +126,7 @@ jobs:
 
         # Update dependencies in this library's build_tarballs.jl to use latest versions
         echo "Updating dependencies for $LIBRARY to latest versions..."
-        julia jll-version-manager.jl update-deps $LIBRARY_DIR/build_tarballs.jl
+        julia --project=@. jll-version-manager.jl update-deps $LIBRARY_DIR/build_tarballs.jl
 
         git config --global user.name 'github-actions'
         git config --global user.email 'github-actions@github.com'

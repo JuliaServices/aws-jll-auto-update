@@ -25,7 +25,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.PAT }}
       run: |
-        julia jll-version-manager.jl update-cache
+        julia --project=@. jll-version-manager.jl update-cache
 
     - name: Commit and push changes if any
       run: |

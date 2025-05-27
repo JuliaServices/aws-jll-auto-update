@@ -12,7 +12,7 @@ jobs:
     - name: Checkout aws-jll-auto-update repository
       uses: actions/checkout@v4
       with:
-        repository: quinnj2/aws-jll-auto-update
+        repository: JuliaServices/aws-jll-auto-update
         token: ${{ secrets.PAT }}
         ref: main
 
@@ -101,8 +101,8 @@ jobs:
     - name: Download JLL version manager
       if: env.LATEST_VERSION != env.CURRENT_VERSION
       run: |
-        curl -L -o jll-version-manager.jl https://raw.githubusercontent.com/quinnj2/aws-jll-auto-update/main/jll-version-manager.jl
-        curl -L -o jll-versions.json https://raw.githubusercontent.com/quinnj2/aws-jll-auto-update/main/jll-versions.json
+        curl -L -o jll-version-manager.jl https://raw.githubusercontent.com/JuliaServices/aws-jll-auto-update/main/jll-version-manager.jl
+        curl -L -o jll-versions.json https://raw.githubusercontent.com/JuliaServices/aws-jll-auto-update/main/jll-versions.json
 
     - name: Compare versions and update if necessary
       if: env.LATEST_VERSION != env.CURRENT_VERSION

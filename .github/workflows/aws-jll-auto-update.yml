@@ -88,16 +88,12 @@ jobs:
           exit 0
         fi
 
-        # Update the library version and SHA
-        sed -i "s/version = v\"${CURRENT_VERSION}\"/version = v\"${LATEST_VERSION}\"/" $LIBRARY_DIR/build_tarballs.jl
-        sed -i "s#${CURRENT_SHA}#${LATEST_SHA}#" $LIBRARY_DIR/build_tarballs.jl
-
-        # Update the JLL version cache with the new version
+        # First, update the JLL version cache in the aws-jll-auto-update repo
         echo "Updating JLL version cache for ${LIBRARY}_jll to ${LATEST_VERSION}..."
-        julia --project=jll-dir jll-dir/jll-version-manager.jl update-version ${LIBRARY} ${LATEST_VERSION}
-
-        # Commit and push the updated jll-versions.json to aws-jll-auto-update repo
         cd jll-dir
+        julia --project=. jll-version-manager.jl update-version ${LIBRARY} ${LATEST_VERSION}
+        
+        # Commit and push the updated jll-versions.json to aws-jll-auto-update repo
         git config --global user.name 'github-actions'
         git config --global user.email 'github-actions@github.com'
         if git diff --exit-code jll-versions.json; then
@@ -109,6 +105,10 @@ jobs:
           echo "Updated JLL versions cache"
         fi
         cd ..
+
+        # Now update the library version and SHA in Yggdrasil
+        sed -i "s/version = v\"${CURRENT_VERSION}\"/version = v\"${LATEST_VERSION}\"/" $LIBRARY_DIR/build_tarballs.jl
+        sed -i "s#${CURRENT_SHA}#${LATEST_SHA}#" $LIBRARY_DIR/build_tarballs.jl
 
         # Update dependencies in this library's build_tarballs.jl to use latest versions
         echo "Updating dependencies for $LIBRARY to latest versions..."

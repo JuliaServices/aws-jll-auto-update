@@ -98,11 +98,14 @@ jobs:
       with:
         version: '1.10'
 
-    - name: Download JLL version manager
+    - name: Checkout aws-jll-auto-update repository
       if: env.LATEST_VERSION != env.CURRENT_VERSION
-      run: |
-        curl -L -o jll-version-manager.jl https://raw.githubusercontent.com/JuliaServices/aws-jll-auto-update/main/jll-version-manager.jl
-        curl -L -o jll-versions.json https://raw.githubusercontent.com/JuliaServices/aws-jll-auto-update/main/jll-versions.json
+      uses: actions/checkout@v4
+      with:
+        repository: JuliaServices/aws-jll-auto-update
+        path: jll-dir
+        token: ${{ secrets.PAT }}
+        ref: main
 
     - name: Compare versions and update if necessary
       if: env.LATEST_VERSION != env.CURRENT_VERSION
@@ -126,7 +129,7 @@ jobs:
 
         # Update dependencies in this library's build_tarballs.jl to use latest versions
         echo "Updating dependencies for $LIBRARY to latest versions..."
-        julia --project=@. jll-version-manager.jl update-deps $LIBRARY_DIR/build_tarballs.jl
+        julia --project=jll-dir jll-dir/jll-version-manager.jl update-deps $LIBRARY_DIR/build_tarballs.jl
 
         git config --global user.name 'github-actions'
         git config --global user.email 'github-actions@github.com'

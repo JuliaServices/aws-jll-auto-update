@@ -1,12 +1,11 @@
 #!/usr/bin/env julia
+import Pkg
+Pkg.instantiate()
 
 using JSON
 using HTTP
 using Dates
 import TOML
-import Pkg
-
-Pkg.instantiate()
 
 """
 Query the Julia General registry for the latest version of a JLL package using local registry.

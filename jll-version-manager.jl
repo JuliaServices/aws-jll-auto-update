@@ -95,15 +95,20 @@ function update_dependencies_in_file(filepath::String, versions_file::String="jl
         if endswith(dep, "_jll")
             cached_version = get_jll_version(dep, versions_file)
             if cached_version !== nothing
-                # Update compat version in the file
-                old_pattern = Regex("((?:Build)?Dependency\\(\"$dep\";\\s*compat=\")([0-9]+\\.[0-9]+\\.[0-9]+)(\")")
-                new_replacement = "\\1$cached_version\\3"
+                # Find and replace each dependency line individually
+                # Look for pattern: Dependency("package_name"; compat="version")
+                dep_pattern = Regex("((?:Build)?Dependency\\(\"$dep\";\\s*compat=\")([0-9]+\\.[0-9]+\\.[0-9]+)(\")")
                 
-                new_content = replace(content, old_pattern => new_replacement)
-                if new_content != content
-                    content = new_content
-                    modified = true
-                    println("  ✓ Updated $dep to $cached_version")
+                if occursin(dep_pattern, content)
+                    # Replace using simple string substitution
+                    old_match = match(dep_pattern, content)
+                    if old_match !== nothing
+                        old_full = old_match.match
+                        new_full = old_match.captures[1] * cached_version * old_match.captures[3]
+                        content = replace(content, old_full => new_full; count=1)
+                        modified = true
+                        println("  ✓ Updated $dep to $cached_version")
+                    end
                 else
                     println("  - No compat constraint found for $dep")
                 end

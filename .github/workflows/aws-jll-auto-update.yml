@@ -59,21 +59,24 @@ jobs:
         echo "CURRENT_SHA=${CURRENT_SHA}"
         
         # Check if current version is greater than latest version (artificial bump case)
+        ARTIFICIAL_BUMP=false
         if [[ "$CURRENT_VERSION" > "$LATEST_VERSION" ]]; then
-          echo "Current version ${CURRENT_VERSION} is greater than latest version ${LATEST_VERSION}. Setting latest version to current version to skip update."
-          LATEST_VERSION=$CURRENT_VERSION
-          echo "LATEST_VERSION=${LATEST_VERSION}" >> $GITHUB_ENV
-          echo "LATEST_VERSION=${LATEST_VERSION}"
+          echo "Current version ${CURRENT_VERSION} is greater than latest version ${LATEST_VERSION}. This is an artificial bump case."
+          ARTIFICIAL_BUMP=true
+          echo "ARTIFICIAL_BUMP=true" >> $GITHUB_ENV
+          # For artificial bumps, we want to update jll-versions.json with current version
+          # but skip Yggdrasil updates
+          echo "Will update jll-versions.json with current version ${CURRENT_VERSION} but skip Yggdrasil updates"
         fi
 
     - name: Setup Julia
-      if: env.LATEST_VERSION != env.CURRENT_VERSION
+      if: env.LATEST_VERSION != env.CURRENT_VERSION || env.ARTIFICIAL_BUMP == 'true'
       uses: julia-actions/setup-julia@v2
       with:
         version: '1.10'
 
     - name: Checkout aws-jll-auto-update repository
-      if: env.LATEST_VERSION != env.CURRENT_VERSION
+      if: env.LATEST_VERSION != env.CURRENT_VERSION || env.ARTIFICIAL_BUMP == 'true'
       uses: actions/checkout@v4
       with:
         repository: JuliaServices/aws-jll-auto-update
@@ -81,8 +84,42 @@ jobs:
         token: ${{ secrets.PAT }}
         ref: main
 
-    - name: Compare versions and update if necessary
-      if: env.LATEST_VERSION != env.CURRENT_VERSION
+    - name: Update JLL versions cache
+      if: env.LATEST_VERSION != env.CURRENT_VERSION || env.ARTIFICIAL_BUMP == 'true'
+      env:
+        GITHUB_TOKEN: ${{ secrets.PAT }}
+      run: |
+        LIBRARY=${{ matrix.library }}
+        
+        # Determine which version to use for JLL update
+        if [[ "$ARTIFICIAL_BUMP" == "true" ]]; then
+          VERSION_TO_UPDATE=$CURRENT_VERSION
+          echo "Artificial bump detected. Updating JLL version cache with current version ${VERSION_TO_UPDATE}"
+        else
+          VERSION_TO_UPDATE=$LATEST_VERSION
+          echo "Normal update. Updating JLL version cache with latest version ${VERSION_TO_UPDATE}"
+        fi
+        
+        # Update the JLL version cache in the aws-jll-auto-update repo
+        echo "Updating JLL version cache for ${LIBRARY}_jll to ${VERSION_TO_UPDATE}..."
+        cd jll-dir
+        julia --project=. jll-version-manager.jl update-version ${LIBRARY} ${VERSION_TO_UPDATE}
+        
+        # Commit and push the updated jll-versions.json to aws-jll-auto-update repo
+        git config --global user.name 'github-actions'
+        git config --global user.email 'github-actions@github.com'
+        if git diff --exit-code jll-versions.json; then
+          echo "No changes to JLL versions cache"
+        else
+          git add jll-versions.json
+          git commit -m "Update ${LIBRARY}_jll to ${VERSION_TO_UPDATE}"
+          git push
+          echo "Updated JLL versions cache"
+        fi
+        cd ..
+
+    - name: Compare versions and update Yggdrasil if necessary
+      if: env.LATEST_VERSION != env.CURRENT_VERSION && env.ARTIFICIAL_BUMP != 'true'
       env:
         GITHUB_TOKEN: ${{ secrets.PAT }}
       run: |
@@ -96,24 +133,6 @@ jobs:
           echo "SKIP_PUSH=true" >> $GITHUB_ENV
           exit 0
         fi
-
-        # First, update the JLL version cache in the aws-jll-auto-update repo
-        echo "Updating JLL version cache for ${LIBRARY}_jll to ${LATEST_VERSION}..."
-        cd jll-dir
-        julia --project=. jll-version-manager.jl update-version ${LIBRARY} ${LATEST_VERSION}
-        
-        # Commit and push the updated jll-versions.json to aws-jll-auto-update repo
-        git config --global user.name 'github-actions'
-        git config --global user.email 'github-actions@github.com'
-        if git diff --exit-code jll-versions.json; then
-          echo "No changes to JLL versions cache"
-        else
-          git add jll-versions.json
-          git commit -m "Update ${LIBRARY}_jll to ${LATEST_VERSION}"
-          git push
-          echo "Updated JLL versions cache"
-        fi
-        cd ..
 
         # Now update the library version and SHA in Yggdrasil
         sed -i "s/version = v\"${CURRENT_VERSION}\"/version = v\"${LATEST_VERSION}\"/" $LIBRARY_DIR/build_tarballs.jl
@@ -133,14 +152,14 @@ jobs:
 
     - name: Checkout fork
       uses: actions/checkout@v4
-      if: env.LATEST_VERSION != env.CURRENT_VERSION && env.SKIP_PUSH != 'true'
+      if: env.LATEST_VERSION != env.CURRENT_VERSION && env.ARTIFICIAL_BUMP != 'true' && env.SKIP_PUSH != 'true'
       with:
         ref: update-versions-${{ matrix.library }}-${{ env.LATEST_VERSION }}
         repository: quinnj2/Yggdrasil
         token: ${{ secrets.PAT }}
 
     - name: Create a PR
-      if: env.LATEST_VERSION != env.CURRENT_VERSION && env.SKIP_PUSH != 'true'
+      if: env.LATEST_VERSION != env.CURRENT_VERSION && env.ARTIFICIAL_BUMP != 'true' && env.SKIP_PUSH != 'true'
       env:
         GH_TOKEN: ${{ secrets.PAT }}
       run: |

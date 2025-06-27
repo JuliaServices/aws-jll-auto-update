@@ -33,7 +33,7 @@ jobs:
         fi
         echo "REPO=$REPO" >> $GITHUB_ENV
 
-    - name: Check latest release version
+    - name: Check latest release version from *aws* repository
       run: |
         LIBRARY=${{ matrix.library }}
          # Get the tags
@@ -57,6 +57,14 @@ jobs:
         CURRENT_SHA=$(grep -oP -m 1 '(?<=GitSource\("https://github.com/'${REPO//\//\\/}'.git", ")[a-f0-9]{40}' $LIBRARY_DIR/build_tarballs.jl)
         echo "CURRENT_SHA=${CURRENT_SHA}" >> $GITHUB_ENV
         echo "CURRENT_SHA=${CURRENT_SHA}"
+        
+        # Check if current version is greater than latest version (artificial bump case)
+        if [[ "$CURRENT_VERSION" > "$LATEST_VERSION" ]]; then
+          echo "Current version ${CURRENT_VERSION} is greater than latest version ${LATEST_VERSION}. Setting latest version to current version to skip update."
+          LATEST_VERSION=$CURRENT_VERSION
+          echo "LATEST_VERSION=${LATEST_VERSION}" >> $GITHUB_ENV
+          echo "LATEST_VERSION=${LATEST_VERSION}"
+        fi
 
     - name: Setup Julia
       if: env.LATEST_VERSION != env.CURRENT_VERSION

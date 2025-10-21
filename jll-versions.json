@@ -11,10 +11,10 @@
     "aws_c_iot_jll": "0.2.1",
     "aws_c_cal_jll": "0.9.4",
     "aws_c_sdkutils_jll": "0.2.4",
-    "aws_c_http_jll": "0.10.5",
+    "aws_c_http_jll": "0.10.6",
     "aws_c_io_jll": "0.23.2",
     "aws_c_common_jll": "0.12.5",
     "aws_c_auth_jll": "0.9.1"
   },
-  "last_updated": "2025-10-21T02:00:09.925"
+  "last_updated": "2025-10-21T02:01:16.711"
 }

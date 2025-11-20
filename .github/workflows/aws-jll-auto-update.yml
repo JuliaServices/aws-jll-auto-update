@@ -58,9 +58,19 @@ jobs:
         echo "CURRENT_SHA=${CURRENT_SHA}" >> $GITHUB_ENV
         echo "CURRENT_SHA=${CURRENT_SHA}"
         
+        # Helper to compare semantic versions using sort -V. Returns success if $1 > $2.
+        version_gt() {
+          if [[ "$1" == "$2" ]]; then
+            return 1
+          fi
+          local highest
+          highest=$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)
+          [[ "$highest" == "$1" ]]
+        }
+
         # Check if current version is greater than latest version (artificial bump case)
         ARTIFICIAL_BUMP=false
-        if [[ "$CURRENT_VERSION" > "$LATEST_VERSION" ]]; then
+        if version_gt "$CURRENT_VERSION" "$LATEST_VERSION"; then
           echo "Current version ${CURRENT_VERSION} is greater than latest version ${LATEST_VERSION}. This is an artificial bump case."
           ARTIFICIAL_BUMP=true
           echo "ARTIFICIAL_BUMP=true" >> $GITHUB_ENV

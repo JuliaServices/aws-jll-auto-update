@@ -14,7 +14,7 @@
     "aws_c_http_jll": "0.10.7",
     "aws_c_io_jll": "0.23.3",
     "aws_c_common_jll": "0.12.6",
-    "aws_c_auth_jll": "0.9.3"
+    "aws_c_auth_jll": "0.9.4"
   },
-  "last_updated": "2025-12-08T21:25:52.012"
+  "last_updated": "2025-12-08T22:27:30.676"
 }

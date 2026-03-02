@@ -6,7 +6,7 @@
     "aws_checksums_jll": "0.2.10",
     "aws_c_s3_jll": "0.11.5",
     "aws_c_http_jq_jll": "0.10.11",
-    "aws_lc_jll": "1.68.0",
+    "aws_lc_jll": "1.69.0",
     "aws_c_mqtt_jll": "0.14.0",
     "aws_c_iot_jll": "0.2.1",
     "aws_c_cal_jll": "0.9.13",
@@ -16,5 +16,5 @@
     "aws_c_common_jll": "0.12.6",
     "aws_c_auth_jll": "0.10.0"
   },
-  "last_updated": "2026-03-02T20:47:14.424"
+  "last_updated": "2026-03-02T20:49:06.081"
 }

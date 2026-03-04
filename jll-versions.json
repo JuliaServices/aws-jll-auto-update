@@ -1,6 +1,6 @@
 {
   "versions": {
-    "aws_c_event_stream_jll": "0.5.9",
+    "aws_c_event_stream_jll": "0.6.0",
     "s2n_tls_jll": "1.7.0",
     "aws_c_compression_jll": "0.3.2",
     "aws_checksums_jll": "0.2.10",
@@ -16,5 +16,5 @@
     "aws_c_common_jll": "0.12.6",
     "aws_c_auth_jll": "0.10.0"
   },
-  "last_updated": "2026-03-03T07:07:42.043"
+  "last_updated": "2026-03-04T23:39:01.619"
 }

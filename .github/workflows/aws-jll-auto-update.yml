@@ -4,14 +4,39 @@ on:
   schedule:
     - cron: '0 * * * *'  # Run every hour
   workflow_dispatch:
+    inputs:
+      library:
+        description: 'JLL to process (e.g. aws_c_s3). Leave empty to process all.'
+        required: false
+        type: string
+        default: ''
 
 jobs:
+  select-libraries:
+    runs-on: ubuntu-latest
+    outputs:
+      library: ${{ steps.select.outputs.library }}
+    steps:
+      - id: select
+        run: |
+          ALL='["aws_c_auth","aws_c_cal","aws_c_common","aws_c_compression","aws_c_event_stream","aws_c_http","aws_c_http_jq","aws_c_io","aws_c_iot","aws_c_mqtt","aws_c_s3","aws_c_sdkutils","aws_checksums","aws_lc","s2n_tls"]'
+          REQUESTED='${{ inputs.library }}'
+          if [[ -z "$REQUESTED" ]]; then
+            echo "library=$ALL" >> "$GITHUB_OUTPUT"
+          elif echo "$ALL" | jq -e --arg lib "$REQUESTED" 'index($lib) != null' > /dev/null; then
+            echo "library=$(jq -cn --arg lib "$REQUESTED" '[$lib]')" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unknown library '$REQUESTED'. Must be one of: $ALL"
+            exit 1
+          fi
+
   update-library:
+    needs: select-libraries
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 1  # Run jobs one at a time to avoid conflicts
       matrix:
-        library: ["aws_c_auth","aws_c_cal","aws_c_common","aws_c_compression","aws_c_event_stream","aws_c_http","aws_c_http_jq","aws_c_io","aws_c_iot","aws_c_mqtt","aws_c_s3","aws_c_sdkutils","aws_checksums","aws_lc","s2n_tls"]
+        library: ${{ fromJSON(needs.select-libraries.outputs.library) }}
 
     steps:
     - name: Checkout JuliaPackaging/Yggdrasil repository

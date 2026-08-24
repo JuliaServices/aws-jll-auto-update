@@ -152,7 +152,7 @@ jobs:
           --search "[${LIBRARY}] Update to version in:title" \
           --limit 100 \
           --json title,url,headRefName \
-          --jq --arg prefix "update-versions-${LIBRARY}-" \
+          | jq --arg prefix "update-versions-${LIBRARY}-" \
           '[.[] | select(.headRefName | startswith($prefix))]')
 
         if [[ "$EXISTING_PRS" != "[]" ]]; then

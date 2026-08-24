@@ -140,6 +140,26 @@ jobs:
           echo "Will update jll-versions.json with current version ${CURRENT_VERSION} but skip Yggdrasil updates"
         fi
 
+    - name: Fail if open Yggdrasil PR already exists for this JLL
+      if: env.LATEST_VERSION != env.CURRENT_VERSION && env.ARTIFICIAL_BUMP != 'true'
+      env:
+        GH_TOKEN: ${{ secrets.PAT }}
+        YGGDRASIL_REPO: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
+      run: |
+        LIBRARY=${{ matrix.library }}
+        EXISTING_PRS=$(gh pr list --repo "$YGGDRASIL_REPO" --state open \
+          --search "[${LIBRARY}] Update to version in:title" \
+          --limit 100 \
+          --json title,url,headRefName \
+          --jq --arg prefix "update-versions-${LIBRARY}-" \
+          '[.[] | select(.headRefName | startswith($prefix))]')
+
+        if [[ "$EXISTING_PRS" != "[]" ]]; then
+          echo "Open Yggdrasil PR(s) already exist for ${LIBRARY}; refusing to create another:"
+          echo "$EXISTING_PRS" | jq -r '.[] | "- \(.title) (\(.headRefName)): \(.url)"'
+          exit 1
+        fi
+
     - name: Setup Julia
       if: env.LATEST_VERSION != env.CURRENT_VERSION || env.ARTIFICIAL_BUMP == 'true'
       uses: julia-actions/setup-julia@v2
@@ -188,24 +208,6 @@ jobs:
           echo "Updated JLL versions cache"
         fi
         cd ..
-
-    - name: Fail if open Yggdrasil PR already exists for this JLL
-      if: env.LATEST_VERSION != env.CURRENT_VERSION && env.ARTIFICIAL_BUMP != 'true'
-      env:
-        GH_TOKEN: ${{ secrets.PAT }}
-        YGGDRASIL_REPO: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
-      run: |
-        LIBRARY=${{ matrix.library }}
-        EXISTING_PRS=$(gh pr list --repo "$YGGDRASIL_REPO" --state open \
-          --json title,url,headRefName \
-          --jq --arg prefix "update-versions-${LIBRARY}-" \
-          '[.[] | select(.headRefName | startswith($prefix))]')
-
-        if [[ "$EXISTING_PRS" != "[]" ]]; then
-          echo "Open Yggdrasil PR(s) already exist for ${LIBRARY}; refusing to create another:"
-          echo "$EXISTING_PRS" | jq -r '.[] | "- \(.title) (\(.headRefName)): \(.url)"'
-          exit 1
-        fi
 
     - name: Compare versions and update Yggdrasil if necessary
       if: env.LATEST_VERSION != env.CURRENT_VERSION && env.ARTIFICIAL_BUMP != 'true'

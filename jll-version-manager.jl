@@ -18,7 +18,7 @@ end
 Strip registry build metadata (`1.73.0+0` → `1.73.0`).
 """
 function strip_build_metadata(version::String)
-    return split(version, '+'; limit=2)[1]
+    return String(split(version, '+'; limit=2)[1])
 end
 
 """
@@ -161,6 +161,218 @@ function next_missing_version(
 end
 
 """
+Return the highest registered version string for a JLL in General.
+"""
+function latest_registered_version(package_name::String, registered::Vector{String}=fetch_registered_versions(package_name))
+    if isempty(registered)
+        error("No registered versions found in General for $(normalize_jll_name(package_name))")
+    end
+    latest = maximum(parse_version, registered)
+    for version in registered
+        if parse_version(version) == latest
+            return version
+        end
+    end
+    return string(latest)
+end
+
+"""
+Strip `_jll` suffix for Yggdrasil / upstream package names.
+"""
+function package_basename(package_name::String)
+    jll = normalize_jll_name(package_name)
+    return endswith(jll, "_jll") ? jll[1:end-4] : jll
+end
+
+"""
+True if Yggdrasil has an open PR updating `package` to `version` (in-flight registration).
+"""
+function has_open_yggdrasil_update_pr(
+    package_name::String,
+    version::String;
+    repo::String="JuliaPackaging/Yggdrasil",
+)
+    pkg = package_basename(package_name)
+    query = "repo:$repo is:pr is:open [$pkg] Update to version $version in:title"
+    url = "https://api.github.com/search/issues?q=" * HTTP.escapeuri(query)
+    headers = ["User-Agent" => "aws-jll-auto-update", "Accept" => "application/vnd.github+json"]
+    token = get(ENV, "GITHUB_TOKEN", get(ENV, "GH_TOKEN", ""))
+    if !isempty(token)
+        push!(headers, "Authorization" => "Bearer $token")
+    end
+    response = HTTP.get(url; headers=headers, status_exception=true)
+    data = JSON.parse(String(response.body))
+    return get(data, "total_count", 0) > 0
+end
+
+"""
+One claimed version that is not present in General.
+"""
+struct VersionInconsistency
+    package::String
+    source::String
+    claimed::String
+    latest::String
+    inflight::Bool
+end
+
+function format_inconsistency(inc::VersionInconsistency)
+    suffix = inc.inflight ? " [in-flight Yggdrasil PR; skip fix]" : ""
+    return "INCONSISTENT $(inc.package): $(inc.source)=$(inc.claimed) not in General (latest=$(inc.latest)) → suggest $(inc.latest)$suffix"
+end
+
+"""
+Load the `versions` map from a JSON file, or an empty Dict if the file is missing.
+"""
+function load_versions_map(filename::String)
+    if !isfile(filename)
+        return Dict{String,Any}()
+    end
+    data = JSON.parsefile(filename)
+    return get(data, "versions", Dict{String,Any}())
+end
+
+"""
+Find cache/baseline version claims that are not registered in General.
+"""
+function find_version_inconsistencies(
+    versions_file::String="jll-versions.json",
+    baseline_file::String="coverage-baseline.json",
+)
+    cache_versions = load_versions_map(versions_file)
+    baseline_versions = load_versions_map(baseline_file)
+    packages = sort(unique(vcat(collect(keys(cache_versions)), collect(keys(baseline_versions)))))
+
+    inconsistencies = VersionInconsistency[]
+    for package in packages
+        registered = fetch_registered_versions(package)
+        registered_set = Set(registered)
+        latest = latest_registered_version(package, registered)
+
+        if haskey(cache_versions, package)
+            claimed = strip_build_metadata(String(cache_versions[package]))
+            if !(claimed in registered_set)
+                inflight = has_open_yggdrasil_update_pr(package, claimed)
+                push!(inconsistencies, VersionInconsistency(package, "cache", claimed, latest, inflight))
+            end
+        end
+
+        if haskey(baseline_versions, package)
+            claimed = strip_build_metadata(String(baseline_versions[package]))
+            if !(claimed in registered_set)
+                # Baseline is a registered-floor; never treat as in-flight.
+                push!(inconsistencies, VersionInconsistency(package, "baseline", claimed, latest, false))
+            end
+        end
+    end
+
+    return inconsistencies
+end
+
+"""
+Print inconsistencies. Returns the list. When `fail_on_find` is true, exit 1 if any exist.
+"""
+function audit_versions(
+    versions_file::String="jll-versions.json",
+    baseline_file::String="coverage-baseline.json";
+    fail_on_find::Bool=true,
+)
+    inconsistencies = find_version_inconsistencies(versions_file, baseline_file)
+    if isempty(inconsistencies)
+        println("All JLL versions are registered in General")
+        return inconsistencies
+    end
+
+    for inc in inconsistencies
+        println(format_inconsistency(inc))
+    end
+    println("$(length(inconsistencies)) inconsistency(ies) found")
+    if fail_on_find
+        exit(1)
+    end
+    return inconsistencies
+end
+
+"""
+Clamp inconsistent claims to the latest General-registered version.
+
+Skips cache entries that have an open Yggdrasil update PR (in-flight registration).
+Always clamps baseline phantoms.
+"""
+function fix_versions(
+    versions_file::String="jll-versions.json",
+    baseline_file::String="coverage-baseline.json",
+)
+    inconsistencies = find_version_inconsistencies(versions_file, baseline_file)
+    if isempty(inconsistencies)
+        println("All JLL versions are registered in General")
+        return inconsistencies
+    end
+
+    for inc in inconsistencies
+        println(format_inconsistency(inc))
+    end
+    println("$(length(inconsistencies)) inconsistency(ies) found")
+
+    cache_fixes = Dict{String,String}()
+    baseline_fixes = Dict{String,String}()
+    skipped = 0
+    for inc in inconsistencies
+        if inc.inflight
+            skipped += 1
+            continue
+        end
+        if inc.source == "cache"
+            cache_fixes[inc.package] = inc.latest
+        elseif inc.source == "baseline"
+            baseline_fixes[inc.package] = inc.latest
+        end
+    end
+
+    if isempty(cache_fixes) && isempty(baseline_fixes)
+        println("No safe clamps (all remaining inconsistencies are in-flight)")
+        return inconsistencies
+    end
+
+    if !isempty(cache_fixes)
+        if !isfile(versions_file)
+            error("Versions file $versions_file not found")
+        end
+        data = JSON.parsefile(versions_file)
+        for (package, version) in cache_fixes
+            data["versions"][package] = version
+            println("Clamped cache $package → $version")
+        end
+        data["last_updated"] = string(now(UTC))
+        open(versions_file, "w") do f
+            JSON.print(f, data, 2)
+            println(f)
+        end
+    end
+
+    if !isempty(baseline_fixes)
+        if !isfile(baseline_file)
+            error("Baseline file $baseline_file not found")
+        end
+        data = JSON.parsefile(baseline_file)
+        for (package, version) in baseline_fixes
+            data["versions"][package] = version
+            println("Clamped baseline $package → $version")
+        end
+        open(baseline_file, "w") do f
+            JSON.print(f, data, 2)
+            println(f)
+        end
+    end
+
+    if skipped > 0
+        println("Skipped $skipped in-flight cache claim(s)")
+    end
+
+    return inconsistencies
+end
+
+"""
 Parse dependencies from a build_tarballs.jl file.
 """
 function parse_dependencies(filepath::String)
@@ -245,6 +457,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
         println("  julia jll-version-manager.jl update-version <package> <version> # Update a specific package version")
         println("  julia jll-version-manager.jl next-missing <package> <upstream_tags_file> [baseline_file]")
         println("  julia jll-version-manager.jl list-missing <package> <upstream_tags_file> [baseline_file]")
+        println("  julia jll-version-manager.jl audit-versions [versions_file] [baseline_file]")
+        println("  julia jll-version-manager.jl fix-versions [versions_file] [baseline_file]")
     elseif ARGS[1] == "update-deps" && length(ARGS) >= 2
         versions_file = length(ARGS) >= 3 ? ARGS[3] : "jll-versions.json"
         update_dependencies_in_file(ARGS[2], versions_file)
@@ -276,6 +490,14 @@ if abspath(PROGRAM_FILE) == @__FILE__
         for version in list_missing_versions(ARGS[2], upstream, baseline_file)
             println(version)
         end
+    elseif ARGS[1] == "audit-versions"
+        versions_file = length(ARGS) >= 2 ? ARGS[2] : "jll-versions.json"
+        baseline_file = length(ARGS) >= 3 ? ARGS[3] : "coverage-baseline.json"
+        audit_versions(versions_file, baseline_file)
+    elseif ARGS[1] == "fix-versions"
+        versions_file = length(ARGS) >= 2 ? ARGS[2] : "jll-versions.json"
+        baseline_file = length(ARGS) >= 3 ? ARGS[3] : "coverage-baseline.json"
+        fix_versions(versions_file, baseline_file)
     else
         println("Unknown command or missing arguments")
         exit(1)

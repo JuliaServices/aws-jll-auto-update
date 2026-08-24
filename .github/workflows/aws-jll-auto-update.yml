@@ -210,13 +210,14 @@ jobs:
         echo "ARTIFICIAL_BUMP=${ARTIFICIAL_BUMP}" >> $GITHUB_ENV
         echo "NEED_YGGDRASIL_UPDATE=${NEED_YGGDRASIL_UPDATE}" >> $GITHUB_ENV
 
-    - name: Fail if open Yggdrasil PR already exists for this JLL
+    - name: Check for existing Yggdrasil PRs for this JLL
       if: env.NEED_YGGDRASIL_UPDATE == 'true'
       env:
         GH_TOKEN: ${{ secrets.PAT }}
         YGGDRASIL_REPO: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
       run: |
         LIBRARY=${{ matrix.library }}
+        BRANCH_NAME="update-versions-${LIBRARY}-${TARGET_VERSION}"
         EXISTING_PRS=$(gh pr list --repo "$YGGDRASIL_REPO" --state open \
           --search "[${LIBRARY}] Update to version in:title" \
           --limit 100 \
@@ -224,10 +225,19 @@ jobs:
           | jq --arg prefix "update-versions-${LIBRARY}-" \
           '[.[] | select(.headRefName | startswith($prefix))]')
 
-        if [[ "$EXISTING_PRS" != "[]" ]]; then
-          echo "Open Yggdrasil PR(s) already exist for ${LIBRARY}; refusing to create another:"
-          echo "$EXISTING_PRS" | jq -r '.[] | "- \(.title) (\(.headRefName)): \(.url)"'
+        CONFLICTING_PRS=$(echo "$EXISTING_PRS" \
+          | jq --arg branch "$BRANCH_NAME" '[.[] | select(.headRefName != $branch)]')
+        if [[ "$CONFLICTING_PRS" != "[]" ]]; then
+          echo "Open Yggdrasil PR(s) exist for a different ${LIBRARY} version; refusing to create another:"
+          echo "$CONFLICTING_PRS" | jq -r '.[] | "- \(.title) (\(.headRefName)): \(.url)"'
           exit 1
+        fi
+
+        SAME_TARGET_PR=$(echo "$EXISTING_PRS" \
+          | jq --arg branch "$BRANCH_NAME" '[.[] | select(.headRefName == $branch)]')
+        if [[ "$SAME_TARGET_PR" != "[]" ]]; then
+          echo "Existing PR targets ${LIBRARY} ${TARGET_VERSION}; its branch will be refreshed if needed:"
+          echo "$SAME_TARGET_PR" | jq -r '.[] | "- \(.title) (\(.headRefName)): \(.url)"'
         fi
 
     - name: Update JLL versions cache
@@ -267,16 +277,10 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.PAT }}
       run: |
+        set -euo pipefail
         LIBRARY=${{ matrix.library }}
         LIBRARY_DIR=$(echo "${LIBRARY:0:1}" | tr '[:lower:]' '[:upper:]')/${LIBRARY}
         BRANCH_NAME="update-versions-$LIBRARY-${TARGET_VERSION}"
-
-        # Check if the branch already exists in quinnj2/Yggdrasil
-        if git ls-remote --exit-code --heads https://github.com/quinnj2/Yggdrasil.git $BRANCH_NAME; then
-          echo "Branch $BRANCH_NAME already exists. Skipping push."
-          echo "SKIP_PUSH=true" >> $GITHUB_ENV
-          exit 0
-        fi
 
         # Update version and SHA (supports both upgrades and backfill downgrades)
         sed -i "s/version = v\"${CURRENT_VERSION}\"/version = v\"${TARGET_VERSION}\"/" $LIBRARY_DIR/build_tarballs.jl
@@ -285,28 +289,62 @@ jobs:
         echo "Updating dependencies for $LIBRARY to latest versions..."
         julia --project=jll-dir jll-dir/jll-version-manager.jl update-deps $LIBRARY_DIR/build_tarballs.jl jll-dir/jll-versions.json
 
+        # Save the desired recipe before switching to an existing PR branch.
+        DESIRED_RECIPE=$(mktemp)
+        cp "$LIBRARY_DIR/build_tarballs.jl" "$DESIRED_RECIPE"
+        git restore "$LIBRARY_DIR/build_tarballs.jl"
+
         git config --global user.name 'github-actions'
         git config --global user.email 'github-actions@github.com'
-        git checkout -b $BRANCH_NAME
-        git add $LIBRARY_DIR/build_tarballs.jl
+
+        if git ls-remote --exit-code --heads https://github.com/quinnj2/Yggdrasil.git "$BRANCH_NAME"; then
+          echo "Refreshing existing branch $BRANCH_NAME"
+          git fetch https://github.com/quinnj2/Yggdrasil.git "$BRANCH_NAME"
+          git checkout -B "$BRANCH_NAME" FETCH_HEAD
+        else
+          git checkout -b "$BRANCH_NAME"
+        fi
+
+        cp "$DESIRED_RECIPE" "$LIBRARY_DIR/build_tarballs.jl"
+        git add "$LIBRARY_DIR/build_tarballs.jl"
+        if git diff --cached --quiet; then
+          echo "Branch $BRANCH_NAME already contains the desired recipe"
+          echo "BRANCH_READY=true" >> "$GITHUB_ENV"
+          exit 0
+        fi
+
         git commit -m "[$LIBRARY] Update to ${TARGET_VERSION} with latest dependency versions"
-        git push https://github.com/quinnj2/Yggdrasil $BRANCH_NAME
+        git push https://github.com/quinnj2/Yggdrasil "$BRANCH_NAME"
+        echo "BRANCH_READY=true" >> "$GITHUB_ENV"
 
     - name: Checkout fork
       uses: actions/checkout@v4
-      if: env.NEED_YGGDRASIL_UPDATE == 'true' && env.SKIP_PUSH != 'true'
+      if: env.NEED_YGGDRASIL_UPDATE == 'true' && env.BRANCH_READY == 'true'
       with:
         ref: update-versions-${{ matrix.library }}-${{ env.TARGET_VERSION }}
         repository: quinnj2/Yggdrasil
         token: ${{ secrets.PAT }}
 
-    - name: Create a PR
-      if: env.NEED_YGGDRASIL_UPDATE == 'true' && env.SKIP_PUSH != 'true'
+    - name: Create or reuse PR
+      if: env.NEED_YGGDRASIL_UPDATE == 'true' && env.BRANCH_READY == 'true'
       env:
         GH_TOKEN: ${{ secrets.PAT }}
         YGGDRASIL_REPO: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
         YGGDRASIL_BASE: ${{ needs.select-libraries.outputs.yggdrasil_base }}
       run: |
+        BRANCH_NAME="update-versions-${{ matrix.library }}-${TARGET_VERSION}"
+        EXISTING_PR=$(gh pr list --repo "$YGGDRASIL_REPO" --state open \
+          --base "$YGGDRASIL_BASE" \
+          --limit 100 \
+          --json url,headRefName,headRepositoryOwner \
+          | jq -r --arg branch "$BRANCH_NAME" \
+            'first(.[] | select(.headRefName == $branch and .headRepositoryOwner.login == "quinnj2") | .url) // empty')
+
+        if [[ -n "$EXISTING_PR" ]]; then
+          echo "Updated existing PR: $EXISTING_PR"
+          exit 0
+        fi
+
         gh pr create --title "[${{ matrix.library }}] Update to version ${TARGET_VERSION}" \
           --body "This PR updates ${{ matrix.library }} to version ${TARGET_VERSION}. cc: @Octogonapus" \
-          --repo "$YGGDRASIL_REPO" --base "$YGGDRASIL_BASE" --head "quinnj2:update-versions-${{ matrix.library }}-${TARGET_VERSION}"
+          --repo "$YGGDRASIL_REPO" --base "$YGGDRASIL_BASE" --head "quinnj2:$BRANCH_NAME"

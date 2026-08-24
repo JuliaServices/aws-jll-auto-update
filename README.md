@@ -39,15 +39,16 @@ A JSON file containing the latest known versions of all AWS-related JLL packages
 This cache is updated by the GitHub Actions workflow when a coverage target or artificial bump is processed. It is used for dependency compat updates.
 
 ### 2. Coverage baseline (`coverage-baseline.json`)
-A **frozen** floor of JLL versions that were registered when coverage catch-up started. Automation never updates this file.
+A **frozen** floor of JLL versions that were registered when coverage catch-up started. The main updater never advances this file as part of coverage catch-up.
 
-Upstream tags at or below the baseline are ignored. Only newer tags missing from General are considered coverage gaps.
+Upstream tags at or below the baseline are ignored. Only newer tags missing from General are considered coverage gaps. The audit workflow may clamp baseline entries that are not actually registered in General.
 
 ### 3. JLL Version Manager (`jll-version-manager.jl`)
 A Julia utility script that:
 - Updates the versions cache
 - Parses `build_tarballs.jl` files and updates dependency versions
 - Computes the next missing upstream version above the coverage baseline
+- Audits / clamps cache and baseline versions that are missing from General
 
 Usage:
 ```bash
@@ -56,6 +57,8 @@ julia jll-version-manager.jl get-version aws_c_common_jll    # Get cached versio
 julia jll-version-manager.jl update-version aws_c_common 0.12.7
 julia jll-version-manager.jl next-missing aws_lc upstream-tags.txt
 julia jll-version-manager.jl list-missing aws_lc upstream-tags.txt
+julia jll-version-manager.jl audit-versions                  # Exit 1 if cache/baseline not in General
+julia jll-version-manager.jl fix-versions                    # Clamp phantoms (skips in-flight Yggdrasil PRs)
 ```
 
 ### 4. GitHub Actions Workflow
@@ -66,7 +69,7 @@ The workflow:
    - Updates `jll-versions.json` to the target
    - Rewrites that library's `build_tarballs.jl` to the target version/SHA
    - Updates dependencies in that file from the cache
-   - Opens a Yggdrasil PR
+   - Opens a Yggdrasil PR, or refreshes the existing PR branch when it targets the same upstream version
 4. If coverage is complete and the recipe version is artificially above all upstream tags, only updates `jll-versions.json`
 
 ## Benefits

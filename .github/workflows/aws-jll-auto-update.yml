@@ -70,6 +70,7 @@ jobs:
     needs: select-libraries
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       max-parallel: 1  # Run jobs one at a time to avoid conflicts
       matrix:
         library: ${{ fromJSON(needs.select-libraries.outputs.library) }}

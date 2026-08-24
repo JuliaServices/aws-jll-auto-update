@@ -4,6 +4,29 @@ Pkg.instantiate()
 
 using JSON
 using Dates
+using HTTP
+using TOML
+
+"""
+Ensure a package name ends with `_jll`.
+"""
+function normalize_jll_name(package_name::String)
+    return endswith(package_name, "_jll") ? package_name : package_name * "_jll"
+end
+
+"""
+Strip registry build metadata (`1.73.0+0` → `1.73.0`).
+"""
+function strip_build_metadata(version::String)
+    return split(version, '+'; limit=2)[1]
+end
+
+"""
+Parse a version string into a `VersionNumber` for ordering.
+"""
+function parse_version(version::String)
+    return VersionNumber(strip_build_metadata(version))
+end
 
 """
 Update a specific JLL package version in the versions JSON file.
@@ -17,7 +40,7 @@ function update_jll_version(package_name::String, new_version::String, filename:
     end
     
     # Ensure package name ends with _jll
-    jll_package_name = endswith(package_name, "_jll") ? package_name : package_name * "_jll"
+    jll_package_name = normalize_jll_name(package_name)
     
     # Update the specific package version
     data["versions"][jll_package_name] = new_version
@@ -42,7 +65,7 @@ function get_jll_version(package_name::String, filename::String="jll-versions.js
     end
     
     data = JSON.parsefile(filename)
-    jll_package_name = endswith(package_name, "_jll") ? package_name : package_name * "_jll"
+    jll_package_name = normalize_jll_name(package_name)
     
     if haskey(data["versions"], jll_package_name)
         return data["versions"][jll_package_name]
@@ -50,6 +73,91 @@ function get_jll_version(package_name::String, filename::String="jll-versions.js
         println("Warning: Package $jll_package_name not found in versions cache")
         return nothing
     end
+end
+
+"""
+Get the frozen coverage baseline (floor) version for a package.
+"""
+function get_baseline_version(package_name::String, filename::String="coverage-baseline.json")
+    if !isfile(filename)
+        error("Coverage baseline file $filename not found")
+    end
+
+    data = JSON.parsefile(filename)
+    jll_package_name = normalize_jll_name(package_name)
+
+    if !haskey(data["versions"], jll_package_name)
+        error("Package $jll_package_name not found in coverage baseline $filename")
+    end
+
+    return String(data["versions"][jll_package_name])
+end
+
+"""
+Fetch registered versions of a JLL from the General registry.
+"""
+function fetch_registered_versions(package_name::String)
+    jll_package_name = normalize_jll_name(package_name)
+    letter = uppercase(string(jll_package_name[1]))
+    url = "https://raw.githubusercontent.com/JuliaRegistries/General/master/jll/$letter/$jll_package_name/Versions.toml"
+
+    response = HTTP.get(url; status_exception=true)
+    versions_toml = TOML.parse(String(response.body))
+
+    registered = String[]
+    for version_key in keys(versions_toml)
+        push!(registered, strip_build_metadata(String(version_key)))
+    end
+    return unique(registered)
+end
+
+"""
+Read upstream versions from a file (one version per line, no leading `v`).
+"""
+function read_upstream_versions(filepath::String)
+    versions = String[]
+    for line in eachline(filepath)
+        version = strip(line)
+        isempty(version) && continue
+        startswith(version, 'v') && (version = version[2:end])
+        push!(versions, version)
+    end
+    return unique(versions)
+end
+
+"""
+List upstream versions newer than the coverage baseline that are not in General.
+"""
+function list_missing_versions(
+    package_name::String,
+    upstream_versions::Vector{String},
+    baseline_file::String="coverage-baseline.json",
+)
+    floor_version = parse_version(get_baseline_version(package_name, baseline_file))
+    registered = Set(fetch_registered_versions(package_name))
+
+    missing = String[]
+    for version in upstream_versions
+        parsed = parse_version(version)
+        normalized = strip_build_metadata(version)
+        if parsed > floor_version && !(normalized in registered)
+            push!(missing, normalized)
+        end
+    end
+
+    return sort(unique(missing); by=parse_version)
+end
+
+"""
+Return the oldest missing upstream version above the coverage baseline, or `nothing`.
+"""
+function next_missing_version(
+    package_name::String,
+    upstream_versions::Vector{String},
+    baseline_file::String="coverage-baseline.json",
+)
+    missing = list_missing_versions(package_name, upstream_versions, baseline_file)
+    return isempty(missing) ? nothing : first(missing)
 end
 
 """
@@ -135,6 +243,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
         println("  julia jll-version-manager.jl update-deps <file> [versions_file]  # Update dependencies in a build_tarballs.jl file")
         println("  julia jll-version-manager.jl get-version <package>              # Get cached version of a package")
         println("  julia jll-version-manager.jl update-version <package> <version> # Update a specific package version")
+        println("  julia jll-version-manager.jl next-missing <package> <upstream_tags_file> [baseline_file]")
+        println("  julia jll-version-manager.jl list-missing <package> <upstream_tags_file> [baseline_file]")
     elseif ARGS[1] == "update-deps" && length(ARGS) >= 2
         versions_file = length(ARGS) >= 3 ? ARGS[3] : "jll-versions.json"
         update_dependencies_in_file(ARGS[2], versions_file)
@@ -147,6 +257,25 @@ if abspath(PROGRAM_FILE) == @__FILE__
         end
     elseif ARGS[1] == "update-version" && length(ARGS) >= 3
         update_jll_version(ARGS[2], ARGS[3])
+    elseif ARGS[1] == "next-missing" && length(ARGS) >= 3
+        baseline_file = length(ARGS) >= 4 ? ARGS[4] : "coverage-baseline.json"
+        upstream = read_upstream_versions(ARGS[3])
+        missing = list_missing_versions(ARGS[2], upstream, baseline_file)
+        if !isempty(missing)
+            println(stderr, "Missing versions above baseline: $(join(missing, ", "))")
+        else
+            println(stderr, "No missing versions above baseline")
+        end
+        next = isempty(missing) ? nothing : first(missing)
+        if next !== nothing
+            println(next)
+        end
+    elseif ARGS[1] == "list-missing" && length(ARGS) >= 3
+        baseline_file = length(ARGS) >= 4 ? ARGS[4] : "coverage-baseline.json"
+        upstream = read_upstream_versions(ARGS[3])
+        for version in list_missing_versions(ARGS[2], upstream, baseline_file)
+            println(version)
+        end
     else
         println("Unknown command or missing arguments")
         exit(1)

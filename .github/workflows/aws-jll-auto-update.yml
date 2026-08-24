@@ -83,6 +83,19 @@ jobs:
         repository: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
         token: ${{ secrets.PAT }}
 
+    - name: Setup Julia
+      uses: julia-actions/setup-julia@v2
+      with:
+        version: '1.10'
+
+    - name: Checkout aws-jll-auto-update repository
+      uses: actions/checkout@v4
+      with:
+        repository: JuliaServices/aws-jll-auto-update
+        path: jll-dir
+        token: ${{ secrets.PAT }}
+        ref: main
+
     - name: compute full repo name
       run: |
         LIBRARY=${{ matrix.library }}
@@ -90,37 +103,79 @@ jobs:
           REPO="quinnj/aws-c-http"
         elif [[ "$LIBRARY" == "s2n_tls" ]]; then
           REPO="aws/s2n-tls"
+        elif [[ "$LIBRARY" == "aws_lc" ]]; then
+          REPO="aws/aws-lc"
         else
           REPO="awslabs/$(echo "$LIBRARY" | tr '_' '-')"
         fi
         echo "REPO=$REPO" >> $GITHUB_ENV
 
-    - name: Check latest release version from *aws* repository
+    - name: Compute coverage target from upstream tags
+      env:
+        GITHUB_TOKEN: ${{ secrets.PAT }}
       run: |
         LIBRARY=${{ matrix.library }}
-         # Get the tags
-        RELEASES=$(curl --retry 5 -L -H "Authorization: token ${{ secrets.PAT }}" https://api.github.com/repos/${{ env.REPO }}/git/refs/tags)
-        echo "RELEASES=$RELEASES"
-        # Parse and sort the versions to get the highest version
-        LATEST_VERSION=$(echo $RELEASES | jq -r '.[] | select(.ref | test("refs/tags/v")) | .ref' | sed 's/refs\/tags\/v//' | sort -V | tail -n 1)
-        LATEST_SHA=$(echo $RELEASES | jq -r --arg LATEST_VERSION "refs/tags/v$LATEST_VERSION" '.[] | select(.ref == $LATEST_VERSION) | .object.sha')
-        echo "LATEST_VERSION=${LATEST_VERSION}" >> $GITHUB_ENV
-        echo "LATEST_SHA=$LATEST_SHA" >> $GITHUB_ENV
-        echo "LATEST_VERSION=$LATEST_VERSION, LATEST_SHA=$LATEST_SHA"
+        RELEASES=$(curl --retry 5 -L -H "Authorization: token ${{ secrets.PAT }}" \
+          "https://api.github.com/repos/${{ env.REPO }}/git/refs/tags")
+        echo "$RELEASES" | jq -r '.[] | select(.ref | test("refs/tags/v")) | .ref' \
+          | sed 's|refs/tags/v||' | sort -V > /tmp/upstream-versions.txt
 
-    - name: Parse current version and sha in build_tarballs.jl
+        MAX_UPSTREAM_VERSION=$(tail -n 1 /tmp/upstream-versions.txt)
+        echo "MAX_UPSTREAM_VERSION=${MAX_UPSTREAM_VERSION}" >> $GITHUB_ENV
+        echo "MAX_UPSTREAM_VERSION=$MAX_UPSTREAM_VERSION"
+
+        NEXT_MISSING_EXIT=0
+        TARGET_VERSION=$(julia --project=jll-dir jll-dir/jll-version-manager.jl \
+          next-missing "${LIBRARY}" /tmp/upstream-versions.txt jll-dir/coverage-baseline.json \
+          2> /tmp/coverage-stderr.txt) || NEXT_MISSING_EXIT=$?
+        cat /tmp/coverage-stderr.txt
+        if [[ $NEXT_MISSING_EXIT -ne 0 ]]; then
+          echo "next-missing failed with exit code ${NEXT_MISSING_EXIT}"
+          exit "$NEXT_MISSING_EXIT"
+        fi
+        TARGET_VERSION=$(echo "$TARGET_VERSION" | grep -E '^[0-9]+(\.[0-9]+)+$' | head -n 1 || true)
+        TARGET_VERSION=$(echo "$TARGET_VERSION" | tr -d '[:space:]')
+
+        ARTIFICIAL_BUMP=false
+        NEED_YGGDRASIL_UPDATE=false
+
+        if [[ -n "$TARGET_VERSION" ]]; then
+          TARGET_SHA=$(echo "$RELEASES" | jq -r --arg tag "refs/tags/v${TARGET_VERSION}" \
+            '.[] | select(.ref == $tag) | .object.sha')
+          if [[ -z "$TARGET_SHA" || "$TARGET_SHA" == "null" ]]; then
+            echo "Could not resolve SHA for tag v${TARGET_VERSION}"
+            exit 1
+          fi
+          echo "TARGET_VERSION=${TARGET_VERSION}" >> $GITHUB_ENV
+          echo "TARGET_SHA=${TARGET_SHA}" >> $GITHUB_ENV
+          echo "Coverage target: TARGET_VERSION=$TARGET_VERSION TARGET_SHA=$TARGET_SHA"
+        else
+          echo "TARGET_VERSION=" >> $GITHUB_ENV
+          echo "TARGET_SHA=" >> $GITHUB_ENV
+          echo "No missing upstream versions above coverage baseline"
+        fi
+
+        echo "ARTIFICIAL_BUMP=${ARTIFICIAL_BUMP}" >> $GITHUB_ENV
+        echo "NEED_YGGDRASIL_UPDATE=${NEED_YGGDRASIL_UPDATE}" >> $GITHUB_ENV
+
+    - name: Parse current version and decide update action
       run: |
         LIBRARY=${{ matrix.library }}
         LIBRARY_DIR=$(echo "${LIBRARY:0:1}" | tr '[:lower:]' '[:upper:]')/${LIBRARY}
         CURRENT_VERSION=$(grep -oP -m 1 '(?<=version = v")[^"]+' $LIBRARY_DIR/build_tarballs.jl | sed 's/^v//')
         echo "CURRENT_VERSION=${CURRENT_VERSION}" >> $GITHUB_ENV
         echo "CURRENT_VERSION=${CURRENT_VERSION}"
-        REPO=${{ env.REPO }}
-        CURRENT_SHA=$(grep -oP -m 1 '(?<=GitSource\("https://github.com/'${REPO//\//\\/}'.git", ")[a-f0-9]{40}' $LIBRARY_DIR/build_tarballs.jl)
+
+        # GitSource may use awslabs/aws-lc even when tags are fetched from aws/aws-lc
+        SOURCE_REPO="${{ env.REPO }}"
+        if [[ "$LIBRARY" == "aws_lc" ]]; then
+          SOURCE_REPO="awslabs/aws-lc"
+        fi
+        CURRENT_SHA=$(grep -oP -m 1 '(?<=GitSource\("https://github.com/'${SOURCE_REPO//\//\\/}'.git", ")[a-f0-9]{40}' $LIBRARY_DIR/build_tarballs.jl)
         echo "CURRENT_SHA=${CURRENT_SHA}" >> $GITHUB_ENV
         echo "CURRENT_SHA=${CURRENT_SHA}"
-        
-        # Helper to compare semantic versions using sort -V. Returns success if $1 > $2.
+        echo "SOURCE_REPO=${SOURCE_REPO}" >> $GITHUB_ENV
+
         version_gt() {
           if [[ "$1" == "$2" ]]; then
             return 1
@@ -130,19 +185,33 @@ jobs:
           [[ "$highest" == "$1" ]]
         }
 
-        # Check if current version is greater than latest version (artificial bump case)
         ARTIFICIAL_BUMP=false
-        if version_gt "$CURRENT_VERSION" "$LATEST_VERSION"; then
-          echo "Current version ${CURRENT_VERSION} is greater than latest version ${LATEST_VERSION}. This is an artificial bump case."
+        NEED_YGGDRASIL_UPDATE=false
+
+        if [[ -n "${TARGET_VERSION}" ]]; then
+          if [[ "$CURRENT_VERSION" != "$TARGET_VERSION" ]]; then
+            NEED_YGGDRASIL_UPDATE=true
+            if version_gt "$CURRENT_VERSION" "$TARGET_VERSION"; then
+              echo "Yggdrasil recipe ($CURRENT_VERSION) is ahead of coverage gap $TARGET_VERSION; will backfill"
+            else
+              echo "Will update Yggdrasil from $CURRENT_VERSION to coverage target $TARGET_VERSION"
+            fi
+          else
+            echo "Yggdrasil recipe already at coverage target $TARGET_VERSION; waiting for register"
+          fi
+        elif version_gt "$CURRENT_VERSION" "$MAX_UPSTREAM_VERSION"; then
           ARTIFICIAL_BUMP=true
-          echo "ARTIFICIAL_BUMP=true" >> $GITHUB_ENV
-          # For artificial bumps, we want to update jll-versions.json with current version
-          # but skip Yggdrasil updates
+          echo "Coverage complete and current version ${CURRENT_VERSION} is greater than max upstream ${MAX_UPSTREAM_VERSION}. Artificial bump case."
           echo "Will update jll-versions.json with current version ${CURRENT_VERSION} but skip Yggdrasil updates"
+        else
+          echo "Coverage complete; no Yggdrasil update needed"
         fi
 
+        echo "ARTIFICIAL_BUMP=${ARTIFICIAL_BUMP}" >> $GITHUB_ENV
+        echo "NEED_YGGDRASIL_UPDATE=${NEED_YGGDRASIL_UPDATE}" >> $GITHUB_ENV
+
     - name: Fail if open Yggdrasil PR already exists for this JLL
-      if: env.LATEST_VERSION != env.CURRENT_VERSION && env.ARTIFICIAL_BUMP != 'true'
+      if: env.NEED_YGGDRASIL_UPDATE == 'true'
       env:
         GH_TOKEN: ${{ secrets.PAT }}
         YGGDRASIL_REPO: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
@@ -161,43 +230,25 @@ jobs:
           exit 1
         fi
 
-    - name: Setup Julia
-      if: env.LATEST_VERSION != env.CURRENT_VERSION || env.ARTIFICIAL_BUMP == 'true'
-      uses: julia-actions/setup-julia@v2
-      with:
-        version: '1.10'
-
-    - name: Checkout aws-jll-auto-update repository
-      if: env.LATEST_VERSION != env.CURRENT_VERSION || env.ARTIFICIAL_BUMP == 'true'
-      uses: actions/checkout@v4
-      with:
-        repository: JuliaServices/aws-jll-auto-update
-        path: jll-dir
-        token: ${{ secrets.PAT }}
-        ref: main
-
     - name: Update JLL versions cache
-      if: env.LATEST_VERSION != env.CURRENT_VERSION || env.ARTIFICIAL_BUMP == 'true'
+      if: env.NEED_YGGDRASIL_UPDATE == 'true' || env.ARTIFICIAL_BUMP == 'true'
       env:
         GITHUB_TOKEN: ${{ secrets.PAT }}
       run: |
         LIBRARY=${{ matrix.library }}
-        
-        # Determine which version to use for JLL update
+
         if [[ "$ARTIFICIAL_BUMP" == "true" ]]; then
           VERSION_TO_UPDATE=$CURRENT_VERSION
           echo "Artificial bump detected. Updating JLL version cache with current version ${VERSION_TO_UPDATE}"
         else
-          VERSION_TO_UPDATE=$LATEST_VERSION
-          echo "Normal update. Updating JLL version cache with latest version ${VERSION_TO_UPDATE}"
+          VERSION_TO_UPDATE=$TARGET_VERSION
+          echo "Updating JLL version cache with coverage target ${VERSION_TO_UPDATE}"
         fi
-        
-        # Update the JLL version cache in the aws-jll-auto-update repo
+
         echo "Updating JLL version cache for ${LIBRARY}_jll to ${VERSION_TO_UPDATE}..."
         cd jll-dir
         julia --project=. jll-version-manager.jl update-version ${LIBRARY} ${VERSION_TO_UPDATE}
-        
-        # Commit and push the updated jll-versions.json to aws-jll-auto-update repo
+
         git config --global user.name 'github-actions'
         git config --global user.email 'github-actions@github.com'
         if git diff --exit-code jll-versions.json; then
@@ -208,16 +259,17 @@ jobs:
           git push
           echo "Updated JLL versions cache"
         fi
+        # coverage-baseline.json is intentionally not updated
         cd ..
 
     - name: Compare versions and update Yggdrasil if necessary
-      if: env.LATEST_VERSION != env.CURRENT_VERSION && env.ARTIFICIAL_BUMP != 'true'
+      if: env.NEED_YGGDRASIL_UPDATE == 'true'
       env:
         GITHUB_TOKEN: ${{ secrets.PAT }}
       run: |
         LIBRARY=${{ matrix.library }}
         LIBRARY_DIR=$(echo "${LIBRARY:0:1}" | tr '[:lower:]' '[:upper:]')/${LIBRARY}
-        BRANCH_NAME="update-versions-$LIBRARY-${LATEST_VERSION}"
+        BRANCH_NAME="update-versions-$LIBRARY-${TARGET_VERSION}"
 
         # Check if the branch already exists in quinnj2/Yggdrasil
         if git ls-remote --exit-code --heads https://github.com/quinnj2/Yggdrasil.git $BRANCH_NAME; then
@@ -226,37 +278,35 @@ jobs:
           exit 0
         fi
 
-        # Now update the library version and SHA in Yggdrasil
-        sed -i "s/version = v\"${CURRENT_VERSION}\"/version = v\"${LATEST_VERSION}\"/" $LIBRARY_DIR/build_tarballs.jl
-        sed -i "s#${CURRENT_SHA}#${LATEST_SHA}#" $LIBRARY_DIR/build_tarballs.jl
+        # Update version and SHA (supports both upgrades and backfill downgrades)
+        sed -i "s/version = v\"${CURRENT_VERSION}\"/version = v\"${TARGET_VERSION}\"/" $LIBRARY_DIR/build_tarballs.jl
+        sed -i "s#${CURRENT_SHA}#${TARGET_SHA}#" $LIBRARY_DIR/build_tarballs.jl
 
-        # Update dependencies in this library's build_tarballs.jl to use latest versions
         echo "Updating dependencies for $LIBRARY to latest versions..."
         julia --project=jll-dir jll-dir/jll-version-manager.jl update-deps $LIBRARY_DIR/build_tarballs.jl jll-dir/jll-versions.json
 
         git config --global user.name 'github-actions'
         git config --global user.email 'github-actions@github.com'
         git checkout -b $BRANCH_NAME
-        # Only add the build_tarballs.jl file, not the entire directory (which includes jll-dir)
         git add $LIBRARY_DIR/build_tarballs.jl
-        git commit -m "[$LIBRARY] Update to ${LATEST_VERSION} with latest dependency versions"
+        git commit -m "[$LIBRARY] Update to ${TARGET_VERSION} with latest dependency versions"
         git push https://github.com/quinnj2/Yggdrasil $BRANCH_NAME
 
     - name: Checkout fork
       uses: actions/checkout@v4
-      if: env.LATEST_VERSION != env.CURRENT_VERSION && env.ARTIFICIAL_BUMP != 'true' && env.SKIP_PUSH != 'true'
+      if: env.NEED_YGGDRASIL_UPDATE == 'true' && env.SKIP_PUSH != 'true'
       with:
-        ref: update-versions-${{ matrix.library }}-${{ env.LATEST_VERSION }}
+        ref: update-versions-${{ matrix.library }}-${{ env.TARGET_VERSION }}
         repository: quinnj2/Yggdrasil
         token: ${{ secrets.PAT }}
 
     - name: Create a PR
-      if: env.LATEST_VERSION != env.CURRENT_VERSION && env.ARTIFICIAL_BUMP != 'true' && env.SKIP_PUSH != 'true'
+      if: env.NEED_YGGDRASIL_UPDATE == 'true' && env.SKIP_PUSH != 'true'
       env:
         GH_TOKEN: ${{ secrets.PAT }}
         YGGDRASIL_REPO: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
         YGGDRASIL_BASE: ${{ needs.select-libraries.outputs.yggdrasil_base }}
       run: |
-        gh pr create --title "[${{ matrix.library }}] Update to version ${LATEST_VERSION}" \
-          --body "This PR updates ${{ matrix.library }} to version ${LATEST_VERSION}. cc: @quinnj @Octogonapus" \
-          --repo "$YGGDRASIL_REPO" --base "$YGGDRASIL_BASE" --head "quinnj2:update-versions-${{ matrix.library }}-${LATEST_VERSION}"
+        gh pr create --title "[${{ matrix.library }}] Update to version ${TARGET_VERSION}" \
+          --body "This PR updates ${{ matrix.library }} to version ${TARGET_VERSION}. cc: @quinnj @Octogonapus" \
+          --repo "$YGGDRASIL_REPO" --base "$YGGDRASIL_BASE" --head "quinnj2:update-versions-${{ matrix.library }}-${TARGET_VERSION}"

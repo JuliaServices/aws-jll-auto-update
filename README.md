@@ -17,6 +17,7 @@ The new strategy focuses on updating dependencies **within** the library being u
 1. **When updating a library**: Update its own dependencies to use the latest available JLL versions
 2. **Maintain a JLL versions cache**: Keep a `jll-versions.json` file with the latest known versions of all AWS-related JLL packages
 3. **Dynamic dependency resolution**: When updating a library's `build_tarballs.jl`, automatically fetch and update its dependencies to the latest versions
+4. **Coverage-based catch-up**: Open Yggdrasil PRs for the oldest upstream release that is newer than a frozen baseline and not yet registered in General (one version at a time, including backfill if the recipe jumped ahead)
 
 ## Components
 
@@ -35,52 +36,52 @@ A JSON file containing the latest known versions of all AWS-related JLL packages
 }
 ```
 
-This cache is updated periodically by the GitHub Actions workflow.
+This cache is updated by the GitHub Actions workflow when a coverage target or artificial bump is processed. It is used for dependency compat updates.
 
-### 2. JLL Version Manager (`jll-version-manager.jl`)
+### 2. Coverage baseline (`coverage-baseline.json`)
+A **frozen** floor of JLL versions that were registered when coverage catch-up started. Automation never updates this file.
+
+Upstream tags at or below the baseline are ignored. Only newer tags missing from General are considered coverage gaps.
+
+### 3. JLL Version Manager (`jll-version-manager.jl`)
 A Julia utility script that:
-- Queries Julia registries and GitHub for latest JLL package versions
 - Updates the versions cache
 - Parses `build_tarballs.jl` files and updates dependency versions
-- Provides a CLI interface for version management
+- Computes the next missing upstream version above the coverage baseline
 
 Usage:
 ```bash
-julia jll-version-manager.jl update-cache                    # Update the versions cache
 julia jll-version-manager.jl update-deps build_tarballs.jl   # Update dependencies in a file
-julia jll-version-manager.jl get-version aws_c_common_jll    # Get latest version of a package
+julia jll-version-manager.jl get-version aws_c_common_jll    # Get cached version of a package
+julia jll-version-manager.jl update-version aws_c_common 0.12.7
+julia jll-version-manager.jl next-missing aws_lc upstream-tags.txt
+julia jll-version-manager.jl list-missing aws_lc upstream-tags.txt
 ```
 
-### 3. GitHub Actions Workflow
-The workflow runs hourly and:
-1. **Updates the JLL cache** with latest versions from Julia registries
-2. **Checks each AWS library** for new releases
-3. **When a new release is found**:
-   - Updates the library version and SHA in its `build_tarballs.jl`
-   - Updates all dependencies in that file to use the latest available versions
-   - Creates a PR with the changes
+### 4. GitHub Actions Workflow
+The workflow:
+1. Fetches upstream `v*` tags for each AWS library
+2. Selects the oldest tag newer than `coverage-baseline.json` that is not in General
+3. When that target differs from the Yggdrasil recipe (including when the recipe is **ahead** of the gap):
+   - Updates `jll-versions.json` to the target
+   - Rewrites that library's `build_tarballs.jl` to the target version/SHA
+   - Updates dependencies in that file from the cache
+   - Opens a Yggdrasil PR
+4. If coverage is complete and the recipe version is artificially above all upstream tags, only updates `jll-versions.json`
 
 ## Benefits
 
 1. **Fewer unnecessary rebuilds**: Only the updated library gets rebuilt, not all its dependents
 2. **Always up-to-date dependencies**: When a library is updated, it automatically gets the latest dependency versions
 3. **Cached version lookups**: Fast dependency resolution using the maintained cache
-4. **Fallback to live queries**: If cache is stale, automatically queries for latest versions
-5. **Comprehensive dependency management**: Handles both `Dependency` and `BuildDependency` declarations
+4. **No skipped releases above the baseline**: Catch-up registers each missing upstream version in order
+5. **Backfill support**: If Yggdrasil already points at a newer tag, the workflow still opens a PR for an older missing gap
 
 ## Example
 
-When `aws_c_common` is updated from 0.12.2 to 0.12.3:
+When `aws_c_common` has General at the baseline `0.12.6` and upstream has `0.12.7` … `0.14.5`:
 
-**Old approach**: 
-- Update `aws_c_common/build_tarballs.jl` to version 0.12.3
-- Find and update ~10 other libraries that depend on `aws_c_common_jll` 
-- All ~10 libraries get rebuilt unnecessarily
+- First PR targets `0.12.7` (not a jump to `0.14.5`)
+- After that version is registered, the next run targets `0.12.8` / the next gap, and so on
 
-**New approach**:
-- Update `aws_c_common/build_tarballs.jl` to version 0.12.3  
-- Update any dependencies within `aws_c_common` to their latest versions
-- Only `aws_c_common` gets rebuilt
-- Other libraries will pick up the new version naturally when they're next updated
-
-This results in significantly fewer spurious rebuilds while keeping the ecosystem current.
+If the Yggdrasil recipe were already at `0.14.5` while `0.12.7` was still missing from General, the workflow would still open a backfill PR for `0.12.7`.

@@ -136,16 +136,16 @@ function list_missing_versions(
     floor_version = parse_version(get_baseline_version(package_name, baseline_file))
     registered = Set(fetch_registered_versions(package_name))
 
-    missing = String[]
+    missing_versions = String[]
     for version in upstream_versions
         parsed = parse_version(version)
         normalized = strip_build_metadata(version)
         if parsed > floor_version && !(normalized in registered)
-            push!(missing, normalized)
+            push!(missing_versions, normalized)
         end
     end
 
-    return sort(unique(missing); by=parse_version)
+    return sort(unique(missing_versions); by=parse_version)
 end
 
 """
@@ -156,8 +156,8 @@ function next_missing_version(
     upstream_versions::Vector{String},
     baseline_file::String="coverage-baseline.json",
 )
-    missing = list_missing_versions(package_name, upstream_versions, baseline_file)
-    return isempty(missing) ? nothing : first(missing)
+    missing_versions = list_missing_versions(package_name, upstream_versions, baseline_file)
+    return isempty(missing_versions) ? nothing : first(missing_versions)
 end
 
 """
@@ -260,13 +260,13 @@ if abspath(PROGRAM_FILE) == @__FILE__
     elseif ARGS[1] == "next-missing" && length(ARGS) >= 3
         baseline_file = length(ARGS) >= 4 ? ARGS[4] : "coverage-baseline.json"
         upstream = read_upstream_versions(ARGS[3])
-        missing = list_missing_versions(ARGS[2], upstream, baseline_file)
-        if !isempty(missing)
-            println(stderr, "Missing versions above baseline: $(join(missing, ", "))")
+        missing_versions = list_missing_versions(ARGS[2], upstream, baseline_file)
+        if !isempty(missing_versions)
+            println(stderr, "Missing versions above baseline: $(join(missing_versions, ", "))")
         else
             println(stderr, "No missing versions above baseline")
         end
-        next = isempty(missing) ? nothing : first(missing)
+        next = isempty(missing_versions) ? nothing : first(missing_versions)
         if next !== nothing
             println(next)
         end

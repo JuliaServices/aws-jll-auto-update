@@ -1,8 +1,8 @@
 name: Sync and Update AWS Libraries
 
 on:
-  schedule:
-    - cron: '0 * * * *'  # Run every hour
+  #schedule:
+  #  - cron: '0 * * * *'  # Run every hour
   workflow_dispatch:
     inputs:
       library:

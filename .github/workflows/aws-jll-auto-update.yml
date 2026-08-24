@@ -308,5 +308,5 @@ jobs:
         YGGDRASIL_BASE: ${{ needs.select-libraries.outputs.yggdrasil_base }}
       run: |
         gh pr create --title "[${{ matrix.library }}] Update to version ${TARGET_VERSION}" \
-          --body "This PR updates ${{ matrix.library }} to version ${TARGET_VERSION}. cc: @quinnj @Octogonapus" \
+          --body "This PR updates ${{ matrix.library }} to version ${TARGET_VERSION}. cc: @Octogonapus" \
           --repo "$YGGDRASIL_REPO" --base "$YGGDRASIL_BASE" --head "quinnj2:update-versions-${{ matrix.library }}-${TARGET_VERSION}"

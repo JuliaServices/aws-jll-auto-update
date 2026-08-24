@@ -4,21 +4,83 @@ on:
   schedule:
     - cron: '0 * * * *'  # Run every hour
   workflow_dispatch:
+    inputs:
+      library:
+        description: 'JLL to process (e.g. aws_c_s3). Leave empty to process all.'
+        required: false
+        type: string
+        default: ''
+      yggdrasil_repo:
+        description: 'Base Yggdrasil repo to open PRs against (owner/Yggdrasil).'
+        required: false
+        type: string
+        default: 'JuliaPackaging/Yggdrasil'
 
 jobs:
+  select-libraries:
+    runs-on: ubuntu-latest
+    outputs:
+      library: ${{ steps.select.outputs.library }}
+      yggdrasil_repo: ${{ steps.yggdrasil.outputs.yggdrasil_repo }}
+      yggdrasil_base: ${{ steps.yggdrasil.outputs.yggdrasil_base }}
+    steps:
+      - id: select
+        env:
+          REQUESTED: ${{ inputs.library }}
+        run: |
+          ALL='["aws_c_auth","aws_c_cal","aws_c_common","aws_c_compression","aws_c_event_stream","aws_c_http","aws_c_http_jq","aws_c_io","aws_c_iot","aws_c_mqtt","aws_c_s3","aws_c_sdkutils","aws_checksums","aws_lc","s2n_tls"]'
+          if [[ -z "$REQUESTED" ]]; then
+            echo "library=$ALL" >> "$GITHUB_OUTPUT"
+          elif echo "$ALL" | jq -e --arg lib "$REQUESTED" 'index($lib) != null' > /dev/null; then
+            echo "library=$(jq -cn --arg lib "$REQUESTED" '[$lib]')" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unknown library '$REQUESTED'. Must be one of: $ALL"
+            exit 1
+          fi
+
+      - id: yggdrasil
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
+          YGGDRASIL_REPO: ${{ inputs.yggdrasil_repo }}
+        run: |
+          YGGDRASIL_REPO="${YGGDRASIL_REPO#"${YGGDRASIL_REPO%%[![:space:]]*}"}"
+          YGGDRASIL_REPO="${YGGDRASIL_REPO%"${YGGDRASIL_REPO##*[![:space:]]}"}"
+          if [[ -z "$YGGDRASIL_REPO" ]]; then
+            YGGDRASIL_REPO="JuliaPackaging/Yggdrasil"
+          fi
+
+          repo_re='^[A-Za-z0-9._-]+/Yggdrasil$'
+          if [[ ! "$YGGDRASIL_REPO" =~ $repo_re ]]; then
+            echo "Invalid yggdrasil_repo '$YGGDRASIL_REPO'. Must match owner/Yggdrasil."
+            exit 1
+          fi
+
+          YGGDRASIL_BASE=$(gh repo view "$YGGDRASIL_REPO" --json defaultBranchRef --jq .defaultBranchRef.name)
+          branch_re='^[A-Za-z0-9._/-]+$'
+          if [[ -z "$YGGDRASIL_BASE" || "$YGGDRASIL_BASE" == *..* || ! "$YGGDRASIL_BASE" =~ $branch_re ]]; then
+            echo "Invalid default branch '$YGGDRASIL_BASE' for $YGGDRASIL_REPO"
+            exit 1
+          fi
+
+          echo "Using Yggdrasil repo $YGGDRASIL_REPO (base branch $YGGDRASIL_BASE)"
+          echo "yggdrasil_repo=$YGGDRASIL_REPO" >> "$GITHUB_OUTPUT"
+          echo "yggdrasil_base=$YGGDRASIL_BASE" >> "$GITHUB_OUTPUT"
+
   update-library:
+    needs: select-libraries
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       max-parallel: 1  # Run jobs one at a time to avoid conflicts
       matrix:
-        library: ["aws_c_auth","aws_c_cal","aws_c_common","aws_c_compression","aws_c_event_stream","aws_c_http","aws_c_http_jq","aws_c_io","aws_c_iot","aws_c_mqtt","aws_c_s3","aws_c_sdkutils","aws_checksums","aws_lc","s2n_tls"]
+        library: ${{ fromJSON(needs.select-libraries.outputs.library) }}
 
     steps:
-    - name: Checkout JuliaPackaging/Yggdrasil repository
+    - name: Checkout Yggdrasil repository
       uses: actions/checkout@v4
       with:
-        ref: master
-        repository: JuliaPackaging/Yggdrasil
+        ref: ${{ needs.select-libraries.outputs.yggdrasil_base }}
+        repository: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
         token: ${{ secrets.PAT }}
 
     - name: compute full repo name
@@ -77,6 +139,26 @@ jobs:
           # For artificial bumps, we want to update jll-versions.json with current version
           # but skip Yggdrasil updates
           echo "Will update jll-versions.json with current version ${CURRENT_VERSION} but skip Yggdrasil updates"
+        fi
+
+    - name: Fail if open Yggdrasil PR already exists for this JLL
+      if: env.LATEST_VERSION != env.CURRENT_VERSION && env.ARTIFICIAL_BUMP != 'true'
+      env:
+        GH_TOKEN: ${{ secrets.PAT }}
+        YGGDRASIL_REPO: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
+      run: |
+        LIBRARY=${{ matrix.library }}
+        EXISTING_PRS=$(gh pr list --repo "$YGGDRASIL_REPO" --state open \
+          --search "[${LIBRARY}] Update to version in:title" \
+          --limit 100 \
+          --json title,url,headRefName \
+          --jq --arg prefix "update-versions-${LIBRARY}-" \
+          '[.[] | select(.headRefName | startswith($prefix))]')
+
+        if [[ "$EXISTING_PRS" != "[]" ]]; then
+          echo "Open Yggdrasil PR(s) already exist for ${LIBRARY}; refusing to create another:"
+          echo "$EXISTING_PRS" | jq -r '.[] | "- \(.title) (\(.headRefName)): \(.url)"'
+          exit 1
         fi
 
     - name: Setup Julia
@@ -172,7 +254,9 @@ jobs:
       if: env.LATEST_VERSION != env.CURRENT_VERSION && env.ARTIFICIAL_BUMP != 'true' && env.SKIP_PUSH != 'true'
       env:
         GH_TOKEN: ${{ secrets.PAT }}
+        YGGDRASIL_REPO: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
+        YGGDRASIL_BASE: ${{ needs.select-libraries.outputs.yggdrasil_base }}
       run: |
         gh pr create --title "[${{ matrix.library }}] Update to version ${LATEST_VERSION}" \
           --body "This PR updates ${{ matrix.library }} to version ${LATEST_VERSION}. cc: @quinnj @Octogonapus" \
-          --repo JuliaPackaging/Yggdrasil --base master
+          --repo "$YGGDRASIL_REPO" --base "$YGGDRASIL_BASE" --head "quinnj2:update-versions-${{ matrix.library }}-${LATEST_VERSION}"

@@ -1,0 +1,27 @@
+name: Test
+
+on:
+  pull_request:
+    paths:
+      - "**.jl"
+      - "Project.toml"
+      - "Manifest.toml"
+      - "test/**"
+      - ".github/workflows/test.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.10"
+
+      - uses: julia-actions/cache@v2
+
+      - name: Instantiate and test
+        run: |
+          julia --startup-file=no --project=. -e 'using Pkg; Pkg.instantiate()'
+          julia --startup-file=no --project=. test/runtests.jl

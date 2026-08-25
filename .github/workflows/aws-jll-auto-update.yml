@@ -133,19 +133,19 @@ jobs:
 
     steps:
     - name: Checkout Yggdrasil repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         ref: ${{ needs.select-libraries.outputs.yggdrasil_base }}
         repository: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
         token: ${{ secrets.PAT }}
 
     - name: Setup Julia
-      uses: julia-actions/setup-julia@v2
+      uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
       with:
         version: '1.10'
 
     - name: Checkout aws-jll-auto-update repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: JuliaServices/aws-jll-auto-update
         path: jll-dir
@@ -401,7 +401,7 @@ jobs:
         echo "BRANCH_READY=true" >> "$GITHUB_ENV"
 
     - name: Checkout fork
-      uses: actions/checkout@v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       if: env.NEED_YGGDRASIL_UPDATE == 'true' && env.BRANCH_READY == 'true'
       with:
         ref: update-versions-${{ matrix.library }}-${{ env.TARGET_VERSION }}

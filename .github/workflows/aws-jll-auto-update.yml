@@ -66,6 +66,58 @@ jobs:
           echo "yggdrasil_repo=$YGGDRASIL_REPO" >> "$GITHUB_OUTPUT"
           echo "yggdrasil_base=$YGGDRASIL_BASE" >> "$GITHUB_OUTPUT"
 
+  cleanup-merged-branches:
+    needs: select-libraries
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.PAT }}
+      YGGDRASIL_REPO: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
+    steps:
+      - name: Delete merged update-versions branches on quinnj2/Yggdrasil
+        run: |
+          set -euo pipefail
+
+          mapfile -t BRANCHES < <(
+            git ls-remote --heads https://github.com/quinnj2/Yggdrasil.git \
+              'refs/heads/update-versions-*' \
+              | awk '{ sub(/^refs\/heads\//, "", $2); print $2 }' \
+              | sort -u
+          )
+
+          if [[ ${#BRANCHES[@]} -eq 0 ]]; then
+            echo "No update-versions-* branches found on quinnj2/Yggdrasil"
+            exit 0
+          fi
+
+          echo "Checking ${#BRANCHES[@]} update-versions-* branch(es) for merged PRs against $YGGDRASIL_REPO"
+          for BRANCH in "${BRANCHES[@]}"; do
+            if [[ ! "$BRANCH" =~ ^update-versions- ]]; then
+              echo "Skipping unexpected ref name: $BRANCH"
+              continue
+            fi
+
+            MERGED_PR=$(gh pr list --repo "$YGGDRASIL_REPO" --state merged \
+              --head "quinnj2:$BRANCH" --limit 1 \
+              --json number,url \
+              | jq -r '.[0].url // empty')
+
+            if [[ -z "$MERGED_PR" ]]; then
+              echo "Keeping $BRANCH (no merged PR)"
+              continue
+            fi
+
+            echo "Deleting $BRANCH (merged PR: $MERGED_PR)"
+            if DELETE_ERR=$(gh api -X DELETE "repos/quinnj2/Yggdrasil/git/refs/heads/${BRANCH}" 2>&1); then
+              echo "Deleted $BRANCH"
+            elif [[ "$DELETE_ERR" == *"Not Found"* ]] || [[ "$DELETE_ERR" == *"Reference does not exist"* ]]; then
+              echo "Branch $BRANCH already absent; continuing"
+            else
+              echo "Unexpected error deleting $BRANCH:"
+              echo "$DELETE_ERR"
+              exit 1
+            fi
+          done
+
   update-library:
     needs: select-libraries
     runs-on: ubuntu-latest

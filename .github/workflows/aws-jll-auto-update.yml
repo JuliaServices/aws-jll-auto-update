@@ -240,6 +240,24 @@ jobs:
           echo "$SAME_TARGET_PR" | jq -r '.[] | "- \(.title) (\(.headRefName)): \(.url)"'
         fi
 
+    - name: Sync quinnj2 Yggdrasil fork with upstream
+      if: env.NEED_YGGDRASIL_UPDATE == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.PAT }}
+        YGGDRASIL_REPO: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
+        YGGDRASIL_BASE: ${{ needs.select-libraries.outputs.yggdrasil_base }}
+      run: |
+        set -euo pipefail
+        if [[ "${YGGDRASIL_REPO,,}" == "quinnj2/yggdrasil" ]]; then
+          echo "quinnj2/Yggdrasil is the selected upstream; no fork sync needed"
+          exit 0
+        fi
+
+        echo "Syncing quinnj2/Yggdrasil from ${YGGDRASIL_REPO}:${YGGDRASIL_BASE}"
+        gh repo sync quinnj2/Yggdrasil \
+          --source "$YGGDRASIL_REPO" \
+          --branch "$YGGDRASIL_BASE"
+
     - name: Update JLL versions cache
       if: env.NEED_YGGDRASIL_UPDATE == 'true' || env.ARTIFICIAL_BUMP == 'true'
       env:

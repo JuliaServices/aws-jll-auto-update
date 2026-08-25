@@ -423,14 +423,8 @@ jobs:
           DEP_PINS_SECTION=$(cat "$DEP_PINS_REPORT")
         fi
 
-        PR_BODY="$(cat <<EOF
-This PR updates ${LIBRARY} to version ${TARGET_VERSION}.
-
-${DEP_PINS_SECTION}
-
-cc: @Octogonapus
-EOF
-)"
+        PR_BODY=$(printf 'This PR updates %s to version %s.\n\n%s\n\ncc: @Octogonapus' \
+          "$LIBRARY" "$TARGET_VERSION" "$DEP_PINS_SECTION")
 
         EXISTING_PR=$(gh pr list --repo "$YGGDRASIL_REPO" --state open \
           --base "$YGGDRASIL_BASE" \

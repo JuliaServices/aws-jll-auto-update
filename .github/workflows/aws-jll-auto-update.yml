@@ -96,10 +96,12 @@ jobs:
               continue
             fi
 
-            MERGED_PR=$(gh pr list --repo "$YGGDRASIL_REPO" --state merged \
-              --head "quinnj2:$BRANCH" --limit 1 \
-              --json number,url \
-              | jq -r '.[0].url // empty')
+            # Use the REST pulls API. `gh pr list --state merged` goes through
+            # Search, where head:owner:branch matches nothing; REST wants owner:branch.
+            MERGED_PR=$(gh api "repos/${YGGDRASIL_REPO}/pulls" \
+              -f state=closed \
+              -f head="quinnj2:${BRANCH}" \
+              --jq '[.[] | select(.merged_at != null) | .html_url] | first // empty')
 
             if [[ -z "$MERGED_PR" ]]; then
               echo "Keeping $BRANCH (no merged PR)"

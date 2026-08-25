@@ -426,19 +426,29 @@ jobs:
         PR_BODY=$(printf 'This PR updates %s to version %s.\n\n%s\n\ncc: @Octogonapus' \
           "$LIBRARY" "$TARGET_VERSION" "$DEP_PINS_SECTION")
 
-        EXISTING_PR=$(gh pr list --repo "$YGGDRASIL_REPO" --state open \
-          --base "$YGGDRASIL_BASE" \
-          --limit 100 \
-          --json url,headRefName,headRepositoryOwner \
-          | jq -r --arg branch "$BRANCH_NAME" \
-            'first(.[] | select(.headRefName == $branch and .headRepositoryOwner.login == "quinnj2") | .url) // empty')
+        # Use REST, not `gh pr list --json headRepositoryOwner`. That GraphQL
+        # field requests Organization name/slug and needs read:org; this PAT
+        # does not have it. Same for `gh pr edit` (known to require read:org).
+        EXISTING_PR_META=$(gh api -X GET "repos/${YGGDRASIL_REPO}/pulls" \
+          -f state=open \
+          -f head="quinnj2:${BRANCH_NAME}" \
+          -f base="$YGGDRASIL_BASE" \
+          --jq 'if length > 0 then "\(.[0].number)\t\(.[0].html_url)" else empty end')
 
-        if [[ -n "$EXISTING_PR" ]]; then
-          gh pr edit "$EXISTING_PR" --repo "$YGGDRASIL_REPO" --body "$PR_BODY"
+        if [[ -n "$EXISTING_PR_META" ]]; then
+          PR_NUMBER="${EXISTING_PR_META%%$'\t'*}"
+          EXISTING_PR="${EXISTING_PR_META#*$'\t'}"
+          jq -n --arg body "$PR_BODY" '{body: $body}' \
+            | gh api -X PATCH "repos/${YGGDRASIL_REPO}/pulls/${PR_NUMBER}" --input - >/dev/null
           echo "Updated existing PR: $EXISTING_PR"
           exit 0
         fi
 
-        gh pr create --title "[${LIBRARY}] Update to version ${TARGET_VERSION}" \
-          --body "$PR_BODY" \
-          --repo "$YGGDRASIL_REPO" --base "$YGGDRASIL_BASE" --head "quinnj2:$BRANCH_NAME"
+        NEW_PR=$(jq -n \
+          --arg title "[${LIBRARY}] Update to version ${TARGET_VERSION}" \
+          --arg body "$PR_BODY" \
+          --arg head "quinnj2:${BRANCH_NAME}" \
+          --arg base "$YGGDRASIL_BASE" \
+          '{title: $title, body: $body, head: $head, base: $base}' \
+          | gh api -X POST "repos/${YGGDRASIL_REPO}/pulls" --input - --jq '.html_url')
+        echo "Created PR: $NEW_PR"

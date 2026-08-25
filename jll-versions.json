@@ -12,9 +12,9 @@
     "aws_c_cal_jll": "0.9.14",
     "aws_c_sdkutils_jll": "0.2.4",
     "aws_c_http_jll": "0.10.15",
-    "aws_c_io_jll": "0.26.3",
+    "aws_c_io_jll": "0.27.0",
     "aws_c_common_jll": "0.13.0",
     "aws_c_auth_jll": "0.10.3"
   },
-  "last_updated": "2026-08-25T21:06:19.043"
+  "last_updated": "2026-08-25T21:31:55.778"
 }

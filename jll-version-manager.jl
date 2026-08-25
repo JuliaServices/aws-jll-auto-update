@@ -559,10 +559,6 @@ function format_dependency_pins_report(
     held::Vector{HeldBackDependency},
 )
     io = IOBuffer()
-    println(io, "## Dependency pins")
-    println(io)
-    println(io, "Resolved via Pkg (mutually compatible), not strict latest.")
-    println(io)
     if isempty(resolved)
         println(io, "No runtime JLL dependencies with compat pins.")
         return String(take!(io))

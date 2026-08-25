@@ -96,9 +96,11 @@ jobs:
               continue
             fi
 
-            # Use the REST pulls API. `gh pr list --state merged` goes through
-            # Search, where head:owner:branch matches nothing; REST wants owner:branch.
-            MERGED_PR=$(gh api "repos/${YGGDRASIL_REPO}/pulls" \
+            # Use the REST pulls API with an explicit GET. `gh api -f` without
+            # -X GET POSTs to create a PR (and 422s on missing base). Also,
+            # `gh pr list --state merged` uses Search where head:owner:branch
+            # matches nothing; REST wants owner:branch.
+            MERGED_PR=$(gh api -X GET "repos/${YGGDRASIL_REPO}/pulls" \
               -f state=closed \
               -f head="quinnj2:${BRANCH}" \
               --jq '[.[] | select(.merged_at != null) | .html_url] | first // empty')

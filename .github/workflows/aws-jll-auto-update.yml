@@ -294,6 +294,7 @@ jobs:
       if: env.NEED_YGGDRASIL_UPDATE == 'true'
       env:
         GITHUB_TOKEN: ${{ secrets.PAT }}
+        YGGDRASIL_BASE: ${{ needs.select-libraries.outputs.yggdrasil_base }}
       run: |
         set -euo pipefail
         LIBRARY=${{ matrix.library }}
@@ -307,7 +308,9 @@ jobs:
         echo "Updating dependencies for $LIBRARY to latest versions..."
         julia --project=jll-dir jll-dir/jll-version-manager.jl update-deps $LIBRARY_DIR/build_tarballs.jl jll-dir/jll-versions.json
 
-        # Save the desired recipe before switching to an existing PR branch.
+        # Save the desired recipe, then rebuild the PR branch from the current
+        # upstream base. gh repo sync only updates the fork's default branch;
+        # reusing a stale feature branch left PRs hundreds of commits behind.
         DESIRED_RECIPE=$(mktemp)
         cp "$LIBRARY_DIR/build_tarballs.jl" "$DESIRED_RECIPE"
         git restore "$LIBRARY_DIR/build_tarballs.jl"
@@ -315,24 +318,27 @@ jobs:
         git config --global user.name 'github-actions'
         git config --global user.email 'github-actions@github.com'
 
-        if git ls-remote --exit-code --heads https://github.com/quinnj2/Yggdrasil.git "$BRANCH_NAME"; then
-          echo "Refreshing existing branch $BRANCH_NAME"
-          git fetch https://github.com/quinnj2/Yggdrasil.git "$BRANCH_NAME"
-          git checkout -B "$BRANCH_NAME" FETCH_HEAD
-        else
-          git checkout -b "$BRANCH_NAME"
-        fi
+        git fetch --depth=1 origin "$YGGDRASIL_BASE"
+        git checkout -B "$BRANCH_NAME" "origin/$YGGDRASIL_BASE"
 
         cp "$DESIRED_RECIPE" "$LIBRARY_DIR/build_tarballs.jl"
         git add "$LIBRARY_DIR/build_tarballs.jl"
         if git diff --cached --quiet; then
-          echo "Branch $BRANCH_NAME already contains the desired recipe"
-          echo "BRANCH_READY=true" >> "$GITHUB_ENV"
-          exit 0
+          echo "Unexpected: coverage target recipe matches $YGGDRASIL_BASE tip"
+          exit 1
         fi
 
         git commit -m "[$LIBRARY] Update to ${TARGET_VERSION} with latest dependency versions"
-        git push https://github.com/quinnj2/Yggdrasil "$BRANCH_NAME"
+
+        # Rewrite any pre-existing fork branch so the PR is based on current upstream.
+        REMOTE_SHA=$(git ls-remote --heads https://github.com/quinnj2/Yggdrasil.git \
+          "refs/heads/$BRANCH_NAME" | awk '{print $1}')
+        if [[ -n "$REMOTE_SHA" ]]; then
+          git push --force-with-lease="refs/heads/$BRANCH_NAME:$REMOTE_SHA" \
+            https://github.com/quinnj2/Yggdrasil "HEAD:refs/heads/$BRANCH_NAME"
+        else
+          git push https://github.com/quinnj2/Yggdrasil "HEAD:refs/heads/$BRANCH_NAME"
+        fi
         echo "BRANCH_READY=true" >> "$GITHUB_ENV"
 
     - name: Checkout fork

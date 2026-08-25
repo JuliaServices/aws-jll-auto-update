@@ -373,78 +373,289 @@ function fix_versions(
 end
 
 """
-Parse dependencies from a build_tarballs.jl file.
+Parse all Dependency / BuildDependency names from a build_tarballs.jl file.
 """
 function parse_dependencies(filepath::String)
     content = read(filepath, String)
-    
-    # Look for dependencies array
+
     dep_match = match(r"dependencies\s*=\s*\[(.*?)\]"s, content)
     if dep_match === nothing
         return String[]
     end
-    
+
     dep_content = dep_match.captures[1]
-    
-    # Extract dependency names (both Dependency and BuildDependency)
     deps = String[]
     for m in eachmatch(r"(?:Build)?Dependency\(\"([^\"]+)\"", dep_content)
         push!(deps, m.captures[1])
     end
-    
     return deps
 end
 
 """
-Update dependency versions in a build_tarballs.jl file using cached versions.
+Parse runtime `Dependency` names only (excludes `BuildDependency`).
 """
-function update_dependencies_in_file(filepath::String, versions_file::String="jll-versions.json")
+function parse_runtime_dependencies(filepath::String)
     content = read(filepath, String)
-    
-    # Parse current dependencies
-    current_deps = parse_dependencies(filepath)
-    
-    println("Found dependencies in $filepath:")
-    for dep in current_deps
-        println("  - $dep")
+
+    dep_match = match(r"dependencies\s*=\s*\[(.*?)\]"s, content)
+    if dep_match === nothing
+        return String[]
     end
-    
-    # Update versions for JLL dependencies
-    modified = false
-    for dep in current_deps
-        if endswith(dep, "_jll")
-            cached_version = get_jll_version(dep, versions_file)
-            if cached_version !== nothing
-                # Find and replace each dependency line individually
-                # Look for pattern: Dependency("package_name"; compat="version")
-                dep_pattern = Regex("((?:Build)?Dependency\\(\"$dep\";\\s*compat=\")([0-9]+\\.[0-9]+\\.[0-9]+)(\")")
-                
-                if occursin(dep_pattern, content)
-                    # Replace using simple string substitution
-                    old_match = match(dep_pattern, content)
-                    if old_match !== nothing
-                        old_full = old_match.match
-                        new_full = old_match.captures[1] * cached_version * old_match.captures[3]
-                        content = replace(content, old_full => new_full; count=1)
-                        modified = true
-                        println("  ✓ Updated $dep to $cached_version")
-                    end
-                else
-                    println("  - No compat constraint found for $dep")
-                end
-            else
-                println("  ✗ No cached version found for $dep")
+
+    dep_content = dep_match.captures[1]
+    deps = String[]
+    for m in eachmatch(r"(Build)?Dependency\(\"([^\"]+)\"", dep_content)
+        m.captures[1] !== nothing && continue
+        push!(deps, m.captures[2])
+    end
+    return deps
+end
+
+"""
+Runtime `*_jll` dependencies that already have a `compat=` pin in the recipe.
+"""
+function runtime_deps_with_compat(filepath::String)
+    content = read(filepath, String)
+    deps = String[]
+    for name in parse_runtime_dependencies(filepath)
+        if endswith(name, "_jll") &&
+           occursin(Regex("Dependency\\(\"$name\";\\s*compat=\""), content)
+            push!(deps, name)
+        end
+    end
+    return deps
+end
+
+"""
+Read direct-dependency versions from a Pkg Manifest.toml.
+"""
+function read_manifest_direct_versions(
+    manifest_file::String,
+    dep_names::AbstractVector{<:AbstractString},
+)
+    man = TOML.parsefile(manifest_file)
+    deps = get(man, "deps", Dict{String,Any}())
+    result = Dict{String,String}()
+    for name in dep_names
+        if !haskey(deps, name)
+            error("Resolved manifest missing dependency $name")
+        end
+        entries = deps[name]
+        entry = entries isa AbstractVector ? first(entries) : entries
+        if !(entry isa AbstractDict) || !haskey(entry, "version")
+            error("Manifest entry for $name has no version")
+        end
+        result[String(name)] = strip_build_metadata(String(entry["version"]))
+    end
+    return result
+end
+
+"""
+Resolve mutually compatible versions for `dep_names` via a temporary Pkg env.
+
+Optional `depot` / `registry` isolate resolution for tests (fresh depot + one local
+registry path). When unset, uses the active Julia depot and its registries.
+"""
+function resolve_compatible_versions(
+    dep_names::Vector{String};
+    depot::Union{Nothing,AbstractString}=nothing,
+    registry::Union{Nothing,AbstractString}=nothing,
+)
+    isempty(dep_names) && return Dict{String,String}()
+
+    project_dir = mktempdir()
+    previous_project = Base.active_project()
+    saved_depot_path = copy(Base.DEPOT_PATH)
+    try
+        if depot !== nothing
+            empty!(Base.DEPOT_PATH)
+            push!(Base.DEPOT_PATH, abspath(depot))
+            mkpath(joinpath(Base.DEPOT_PATH[1], "registries"))
+        end
+        if registry !== nothing
+            Pkg.Registry.add(Pkg.RegistrySpec(; path=abspath(registry)))
+        end
+        Pkg.activate(project_dir)
+        Pkg.add([Pkg.PackageSpec(; name=name) for name in dep_names])
+        manifest_file = joinpath(project_dir, "Manifest.toml")
+        if !isfile(manifest_file)
+            error("Pkg.add did not produce a Manifest.toml in $project_dir")
+        end
+        return read_manifest_direct_versions(manifest_file, dep_names)
+    finally
+        empty!(Base.DEPOT_PATH)
+        append!(Base.DEPOT_PATH, saved_depot_path)
+        if previous_project !== nothing && isfile(previous_project)
+            Pkg.activate(previous_project)
+        end
+    end
+end
+
+"""
+A direct dependency pinned below the latest known version.
+"""
+struct HeldBackDependency
+    name::String
+    resolved::String
+    latest::String
+end
+
+"""
+Latest known version: max of versions-cache entry and General registration (when available).
+"""
+function latest_known_version(
+    package_name::String,
+    versions_file::String;
+    use_general::Bool=true,
+)
+    candidates = String[]
+    jll_package_name = normalize_jll_name(package_name)
+    versions = load_versions_map(versions_file)
+    if haskey(versions, jll_package_name)
+        push!(candidates, strip_build_metadata(String(versions[jll_package_name])))
+    end
+    if use_general
+        try
+            push!(candidates, latest_registered_version(package_name))
+        catch e
+            @warn "Could not fetch General versions for $package_name" exception = e
+        end
+    end
+    isempty(candidates) && return nothing
+    best = maximum(parse_version, candidates)
+    for candidate in candidates
+        if parse_version(candidate) == best
+            return candidate
+        end
+    end
+    return string(best)
+end
+
+"""
+Deps whose resolved pin is strictly older than the latest known version.
+"""
+function held_back_dependencies(
+    resolved::Dict{String,String},
+    versions_file::String;
+    use_general::Bool=true,
+)
+    held = HeldBackDependency[]
+    for name in sort!(collect(keys(resolved)))
+        latest = latest_known_version(name, versions_file; use_general=use_general)
+        latest === nothing && continue
+        resolved_ver = resolved[name]
+        if parse_version(resolved_ver) < parse_version(latest)
+            push!(held, HeldBackDependency(name, resolved_ver, latest))
+        end
+    end
+    return held
+end
+
+"""
+Markdown fragment describing resolved pins and anything held back from latest.
+"""
+function format_dependency_pins_report(
+    resolved::Dict{String,String},
+    held::Vector{HeldBackDependency},
+)
+    io = IOBuffer()
+    println(io, "## Dependency pins")
+    println(io)
+    println(io, "Resolved via Pkg (mutually compatible), not strict latest.")
+    println(io)
+    if isempty(resolved)
+        println(io, "No runtime JLL dependencies with compat pins.")
+        return String(take!(io))
+    end
+    if isempty(held)
+        println(io, "All runtime deps pinned at latest known.")
+        for name in sort!(collect(keys(resolved)))
+            println(io, "- `$name`: $(resolved[name])")
+        end
+    else
+        println(io, "### Held back from latest")
+        for h in held
+            println(io, "- `$(h.name)`: using **$(h.resolved)** (latest known **$(h.latest)**)")
+        end
+        held_names = Set(h.name for h in held)
+        at_latest = sort([n for n in keys(resolved) if !(n in held_names)])
+        if !isempty(at_latest)
+            println(io)
+            println(io, "### At latest")
+            for name in at_latest
+                println(io, "- `$name`: $(resolved[name])")
             end
         end
     end
-    
+    return String(take!(io))
+end
+
+"""
+Update dependency compat pins using Pkg-resolved mutually compatible versions.
+"""
+function update_dependencies_in_file(
+    filepath::String,
+    versions_file::String="jll-versions.json";
+    report_file::Union{String,Nothing}=nothing,
+    use_general::Bool=true,
+)
+    content = read(filepath, String)
+    deps = runtime_deps_with_compat(filepath)
+
+    println("Found runtime JLL dependencies with compat in $filepath:")
+    for dep in deps
+        println("  - $dep")
+    end
+
+    if isempty(deps)
+        report = format_dependency_pins_report(Dict{String,String}(), HeldBackDependency[])
+        println(report)
+        if report_file !== nothing
+            write(report_file, report)
+        end
+        println("No dependency updates needed for $filepath")
+        return false
+    end
+
+    println("Resolving mutually compatible versions with Pkg...")
+    resolved = resolve_compatible_versions(deps)
+
+    modified = false
+    for dep in deps
+        new_version = resolved[dep]
+        dep_pattern = Regex("(Dependency\\(\"$dep\";\\s*compat=\")([0-9]+\\.[0-9]+\\.[0-9]+)(\")")
+        old_match = match(dep_pattern, content)
+        if old_match === nothing
+            println("  - No compat constraint found for $dep (skipped)")
+            continue
+        end
+        old_version = old_match.captures[2]
+        if old_version == new_version
+            println("  - $dep already at $new_version")
+            continue
+        end
+        old_full = old_match.match
+        new_full = old_match.captures[1] * new_version * old_match.captures[3]
+        content = replace(content, old_full => new_full; count=1)
+        modified = true
+        println("  ✓ Updated $dep: $old_version → $new_version")
+    end
+
     if modified
         write(filepath, content)
         println("Updated dependencies in $filepath")
     else
-        println("No dependency updates needed for $filepath")
+        println("No dependency text changes needed for $filepath")
     end
-    
+
+    held = held_back_dependencies(resolved, versions_file; use_general=use_general)
+    report = format_dependency_pins_report(resolved, held)
+    println(report)
+    if report_file !== nothing
+        write(report_file, report)
+        println("Wrote dependency pins report to $report_file")
+    end
+
     return modified
 end
 
@@ -452,7 +663,7 @@ end
 if abspath(PROGRAM_FILE) == @__FILE__
     if length(ARGS) == 0
         println("Usage:")
-        println("  julia jll-version-manager.jl update-deps <file> [versions_file]  # Update dependencies in a build_tarballs.jl file")
+        println("  julia jll-version-manager.jl update-deps <file> [versions_file] [report_file]")
         println("  julia jll-version-manager.jl get-version <package>              # Get cached version of a package")
         println("  julia jll-version-manager.jl update-version <package> <version> # Update a specific package version")
         println("  julia jll-version-manager.jl next-missing <package> <upstream_tags_file> [baseline_file]")
@@ -461,7 +672,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
         println("  julia jll-version-manager.jl fix-versions [versions_file] [baseline_file]")
     elseif ARGS[1] == "update-deps" && length(ARGS) >= 2
         versions_file = length(ARGS) >= 3 ? ARGS[3] : "jll-versions.json"
-        update_dependencies_in_file(ARGS[2], versions_file)
+        report_file = length(ARGS) >= 4 ? ARGS[4] : nothing
+        update_dependencies_in_file(ARGS[2], versions_file; report_file=report_file)
     elseif ARGS[1] == "get-version" && length(ARGS) >= 2
         version = get_jll_version(ARGS[2])
         if version !== nothing

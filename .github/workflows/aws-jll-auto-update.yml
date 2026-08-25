@@ -133,19 +133,19 @@ jobs:
 
     steps:
     - name: Checkout Yggdrasil repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         ref: ${{ needs.select-libraries.outputs.yggdrasil_base }}
         repository: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
         token: ${{ secrets.PAT }}
 
     - name: Setup Julia
-      uses: julia-actions/setup-julia@v2
+      uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
       with:
         version: '1.10'
 
     - name: Checkout aws-jll-auto-update repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: JuliaServices/aws-jll-auto-update
         path: jll-dir
@@ -361,8 +361,11 @@ jobs:
         sed -i "s/version = v\"${CURRENT_VERSION}\"/version = v\"${TARGET_VERSION}\"/" $LIBRARY_DIR/build_tarballs.jl
         sed -i "s#${CURRENT_SHA}#${TARGET_SHA}#" $LIBRARY_DIR/build_tarballs.jl
 
-        echo "Updating dependencies for $LIBRARY to latest versions..."
-        julia --project=jll-dir jll-dir/jll-version-manager.jl update-deps $LIBRARY_DIR/build_tarballs.jl jll-dir/jll-versions.json
+        echo "Updating dependencies for $LIBRARY to mutually compatible versions..."
+        DEP_PINS_REPORT="${RUNNER_TEMP}/dep-pins-report-${LIBRARY}.md"
+        julia --project=jll-dir jll-dir/jll-version-manager.jl update-deps \
+          "$LIBRARY_DIR/build_tarballs.jl" jll-dir/jll-versions.json "$DEP_PINS_REPORT"
+        echo "DEP_PINS_REPORT=${DEP_PINS_REPORT}" >> "$GITHUB_ENV"
 
         # Save the desired recipe, then rebuild the PR branch from the current
         # upstream base. gh repo sync only updates the fork's default branch;
@@ -384,7 +387,7 @@ jobs:
           exit 1
         fi
 
-        git commit -m "[$LIBRARY] Update to ${TARGET_VERSION} with latest dependency versions"
+        git commit -m "[$LIBRARY] Update to ${TARGET_VERSION} with compatible dependency versions"
 
         # Rewrite any pre-existing fork branch so the PR is based on current upstream.
         REMOTE_SHA=$(git ls-remote --heads https://github.com/quinnj2/Yggdrasil.git \
@@ -398,7 +401,7 @@ jobs:
         echo "BRANCH_READY=true" >> "$GITHUB_ENV"
 
     - name: Checkout fork
-      uses: actions/checkout@v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       if: env.NEED_YGGDRASIL_UPDATE == 'true' && env.BRANCH_READY == 'true'
       with:
         ref: update-versions-${{ matrix.library }}-${{ env.TARGET_VERSION }}
@@ -413,6 +416,22 @@ jobs:
         YGGDRASIL_BASE: ${{ needs.select-libraries.outputs.yggdrasil_base }}
       run: |
         BRANCH_NAME="update-versions-${{ matrix.library }}-${TARGET_VERSION}"
+        LIBRARY=${{ matrix.library }}
+
+        DEP_PINS_SECTION=""
+        if [[ -n "${DEP_PINS_REPORT:-}" && -f "$DEP_PINS_REPORT" ]]; then
+          DEP_PINS_SECTION=$(cat "$DEP_PINS_REPORT")
+        fi
+
+        PR_BODY="$(cat <<EOF
+This PR updates ${LIBRARY} to version ${TARGET_VERSION}.
+
+${DEP_PINS_SECTION}
+
+cc: @Octogonapus
+EOF
+)"
+
         EXISTING_PR=$(gh pr list --repo "$YGGDRASIL_REPO" --state open \
           --base "$YGGDRASIL_BASE" \
           --limit 100 \
@@ -421,10 +440,11 @@ jobs:
             'first(.[] | select(.headRefName == $branch and .headRepositoryOwner.login == "quinnj2") | .url) // empty')
 
         if [[ -n "$EXISTING_PR" ]]; then
+          gh pr edit "$EXISTING_PR" --repo "$YGGDRASIL_REPO" --body "$PR_BODY"
           echo "Updated existing PR: $EXISTING_PR"
           exit 0
         fi
 
-        gh pr create --title "[${{ matrix.library }}] Update to version ${TARGET_VERSION}" \
-          --body "This PR updates ${{ matrix.library }} to version ${TARGET_VERSION}. cc: @Octogonapus" \
+        gh pr create --title "[${LIBRARY}] Update to version ${TARGET_VERSION}" \
+          --body "$PR_BODY" \
           --repo "$YGGDRASIL_REPO" --base "$YGGDRASIL_BASE" --head "quinnj2:$BRANCH_NAME"

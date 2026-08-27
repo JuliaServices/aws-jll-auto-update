@@ -17,7 +17,7 @@ The new strategy focuses on updating dependencies **within** the library being u
 1. **When updating a library**: Resolve its runtime JLL dependencies with Pkg (mutually compatible set) and pin those versions in `build_tarballs.jl`
 2. **Maintain a JLL versions cache**: Keep a `jll-versions.json` file with the latest known versions of all AWS-related JLL packages (coverage / bookkeeping; not the sole source of recipe pins)
 3. **Held-back reporting**: If Pkg pins a dep below the latest known version, list it in the Yggdrasil PR description
-4. **Coverage-based catch-up**: Open Yggdrasil PRs for the oldest upstream release that is newer than a frozen baseline and not yet registered in General (one version at a time, including backfill if the recipe jumped ahead)
+4. **Coverage-based catch-up**: Open Yggdrasil PRs for missing upstream releases above a frozen baseline, collapsing each breaking-compat series to its latest version (one target at a time, including backfill if the recipe jumped ahead)
 
 ## Components
 
@@ -48,7 +48,7 @@ A Julia utility script that:
 - Updates the versions cache
 - Parses `build_tarballs.jl` files and updates dependency compat pins via a temporary `Pkg.add` resolve
 - Reports dependencies held back from latest known (for Yggdrasil PR bodies)
-- Computes the next missing upstream version above the coverage baseline
+- Computes coverage targets: latest release per missing breaking-compat series above the baseline
 - Audits / clamps cache and baseline versions that are missing from General
 
 Usage:
@@ -65,7 +65,7 @@ julia jll-version-manager.jl fix-versions                    # Clamp phantoms (s
 ### 4. GitHub Actions Workflow
 The workflow:
 1. Fetches upstream `v*` tags for each AWS library
-2. Selects the oldest tag newer than `coverage-baseline.json` that is not in General
+2. Selects coverage targets: for each missing breaking series (Julia SemVer: major for ≥1.0, minor for 0.x), keep only the latest version; then take the oldest such target
 3. When that target differs from the Yggdrasil recipe (including when the recipe is **ahead** of the gap):
    - Updates `jll-versions.json` to the target
    - Rewrites that library's `build_tarballs.jl` to the target version/SHA
@@ -78,14 +78,14 @@ The workflow:
 1. **Fewer unnecessary rebuilds**: Only the updated library gets rebuilt, not all its dependents
 2. **Resolvable dependency sets**: Pins come from Pkg’s mutually compatible resolve, so mid-stack breaking bumps (e.g. `aws_c_common` 0.12 vs 0.13) do not produce unsatisfiable recipes
 3. **Visible holdbacks**: Yggdrasil PRs list any dep kept below latest known
-4. **No skipped releases above the baseline**: Catch-up registers each missing upstream version in order
+4. **Skip redundant compatible releases**: Catch-up registers only the latest release in each breaking series (e.g. `5.6.0` instead of every `5.x`)
 5. **Backfill support**: If Yggdrasil already points at a newer tag, the workflow still opens a PR for an older missing gap
 
 ## Example
 
-When `aws_c_common` has General at the baseline `0.12.6` and upstream has `0.12.7` … `0.14.5`:
+When missing upstream versions are `4.0.0, 5.0.0, …, 5.6.0`:
 
-- First PR targets `0.12.7` (not a jump to `0.14.5`)
-- After that version is registered, the next run targets `0.12.8` / the next gap, and so on
+- Coverage targets collapse to `4.0.0, 5.6.0`
+- First PR targets `4.0.0`; after that is registered, the next run targets `5.6.0`
 
-If the Yggdrasil recipe were already at `0.14.5` while `0.12.7` was still missing from General, the workflow would still open a backfill PR for `0.12.7`.
+For `0.x` packages (e.g. `aws_c_common` with gaps `0.12.7`, `0.12.8`, `0.13.0`, `0.13.1`, `0.14.5`), targets are `0.12.8, 0.13.1, 0.14.5` — one per minor series.

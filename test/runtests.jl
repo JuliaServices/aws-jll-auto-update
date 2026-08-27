@@ -9,6 +9,37 @@ include(joinpath(@__DIR__, "compat_resolve_fixture.jl"))
     @test strip_build_metadata("1.73.0") == "1.73.0"
 end
 
+@testset "breaking_compat_key" begin
+    @test breaking_compat_key(v"0.12.7") == (0, 12)
+    @test breaking_compat_key(v"0.13.0") == (0, 13)
+    @test breaking_compat_key(v"4.0.0") == (4,)
+    @test breaking_compat_key(v"5.6.0") == (5,)
+end
+
+@testset "latest_per_breaking_version" begin
+    @test latest_per_breaking_version([
+        "4.0.0",
+        "5.0.0",
+        "5.1.0",
+        "5.2.0",
+        "5.3.0",
+        "5.4.0",
+        "5.5.0",
+        "5.6.0",
+    ]) == ["4.0.0", "5.6.0"]
+
+    @test latest_per_breaking_version([
+        "0.12.7",
+        "0.12.8",
+        "0.13.0",
+        "0.13.1",
+        "0.14.5",
+    ]) == ["0.12.8", "0.13.1", "0.14.5"]
+
+    @test latest_per_breaking_version(String[]) == String[]
+    @test latest_per_breaking_version(["1.2.3"]) == ["1.2.3"]
+end
+
 @testset "read_manifest_direct_versions" begin
     manifest = joinpath(@__DIR__, "fixtures", "sample-Manifest.toml")
     versions = read_manifest_direct_versions(

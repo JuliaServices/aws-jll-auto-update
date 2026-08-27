@@ -149,15 +149,55 @@ function list_missing_versions(
 end
 
 """
-Return the oldest missing upstream version above the coverage baseline, or `nothing`.
+Julia Pkg breaking-compat key: major for ≥1.0, `(major, minor)` for 0.x.
+"""
+function breaking_compat_key(v::VersionNumber)
+    return v.major == 0 ? (v.major, v.minor) : (v.major,)
+end
+
+"""
+Keep only the latest version within each breaking-compat series.
+
+For example, `4.0.0, 5.0.0, …, 5.6.0` becomes `4.0.0, 5.6.0`, and
+`0.12.7, 0.12.8, 0.13.0, 0.13.1` becomes `0.12.8, 0.13.1`.
+"""
+function latest_per_breaking_version(versions::Vector{String})
+    best = Dict{Any,String}()
+    for version in versions
+        normalized = strip_build_metadata(version)
+        key = breaking_compat_key(parse_version(normalized))
+        if !haskey(best, key) || parse_version(normalized) > parse_version(best[key])
+            best[key] = normalized
+        end
+    end
+    return sort(collect(values(best)); by=parse_version)
+end
+
+"""
+Missing upstream versions collapsed to the latest release per breaking series.
+"""
+function coverage_target_versions(
+    package_name::String,
+    upstream_versions::Vector{String},
+    baseline_file::String="coverage-baseline.json",
+)
+    return latest_per_breaking_version(
+        list_missing_versions(package_name, upstream_versions, baseline_file),
+    )
+end
+
+"""
+Return the oldest coverage target above the baseline, or `nothing`.
+
+Targets are the latest backward-compatible release in each missing breaking series.
 """
 function next_missing_version(
     package_name::String,
     upstream_versions::Vector{String},
     baseline_file::String="coverage-baseline.json",
 )
-    missing_versions = list_missing_versions(package_name, upstream_versions, baseline_file)
-    return isempty(missing_versions) ? nothing : first(missing_versions)
+    targets = coverage_target_versions(package_name, upstream_versions, baseline_file)
+    return isempty(targets) ? nothing : first(targets)
 end
 
 """
@@ -682,20 +722,20 @@ if abspath(PROGRAM_FILE) == @__FILE__
     elseif ARGS[1] == "next-missing" && length(ARGS) >= 3
         baseline_file = length(ARGS) >= 4 ? ARGS[4] : "coverage-baseline.json"
         upstream = read_upstream_versions(ARGS[3])
-        missing_versions = list_missing_versions(ARGS[2], upstream, baseline_file)
-        if !isempty(missing_versions)
-            println(stderr, "Missing versions above baseline: $(join(missing_versions, ", "))")
+        targets = coverage_target_versions(ARGS[2], upstream, baseline_file)
+        if !isempty(targets)
+            println(stderr, "Coverage targets (latest per breaking series): $(join(targets, ", "))")
         else
             println(stderr, "No missing versions above baseline")
         end
-        next = isempty(missing_versions) ? nothing : first(missing_versions)
+        next = isempty(targets) ? nothing : first(targets)
         if next !== nothing
             println(next)
         end
     elseif ARGS[1] == "list-missing" && length(ARGS) >= 3
         baseline_file = length(ARGS) >= 4 ? ARGS[4] : "coverage-baseline.json"
         upstream = read_upstream_versions(ARGS[3])
-        for version in list_missing_versions(ARGS[2], upstream, baseline_file)
+        for version in coverage_target_versions(ARGS[2], upstream, baseline_file)
             println(version)
         end
     elseif ARGS[1] == "audit-versions"

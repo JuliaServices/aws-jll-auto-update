@@ -131,16 +131,23 @@ List upstream versions newer than the coverage baseline that are not in General.
 function list_missing_versions(
     package_name::String,
     upstream_versions::Vector{String},
-    baseline_file::String="coverage-baseline.json",
+    baseline_file::String="coverage-baseline.json";
+    registered::Union{Nothing,Vector{String}}=nothing,
 )
     floor_version = parse_version(get_baseline_version(package_name, baseline_file))
-    registered = Set(fetch_registered_versions(package_name))
+    registered_versions = registered === nothing ? fetch_registered_versions(package_name) : registered
+    registered_set = Set(strip_build_metadata(v) for v in registered_versions)
+    registered_best = latest_registered_per_breaking_series(registered_versions)
 
     missing_versions = String[]
     for version in upstream_versions
         parsed = parse_version(version)
         normalized = strip_build_metadata(version)
-        if parsed > floor_version && !(normalized in registered)
+        if parsed > floor_version && !(normalized in registered_set)
+            key = breaking_compat_key(parsed)
+            if haskey(registered_best, key) && parsed <= registered_best[key]
+                continue
+            end
             push!(missing_versions, normalized)
         end
     end
@@ -153,6 +160,21 @@ Julia Pkg breaking-compat key: major for ≥1.0, `(major, minor)` for 0.x.
 """
 function breaking_compat_key(v::VersionNumber)
     return v.major == 0 ? (v.major, v.minor) : (v.major,)
+end
+
+"""
+Latest registered release within each breaking-compat series.
+"""
+function latest_registered_per_breaking_series(registered::Vector{String})
+    best = Dict{Any,VersionNumber}()
+    for version in registered
+        parsed = parse_version(version)
+        key = breaking_compat_key(parsed)
+        if !haskey(best, key) || parsed > best[key]
+            best[key] = parsed
+        end
+    end
+    return best
 end
 
 """

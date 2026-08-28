@@ -40,6 +40,46 @@ end
     @test latest_per_breaking_version(["1.2.3"]) == ["1.2.3"]
 end
 
+@testset "list_missing_versions skips superseded patches" begin
+    baseline = tempname()
+    write(baseline, """{"versions": {"aws_c_io_jll": "0.26.3"}}""")
+    try
+        upstream = ["0.27.5", "0.27.6", "1.0.0"]
+        registered = ["0.26.3", "0.27.6"]
+
+        missing = list_missing_versions(
+            "aws_c_io_jll",
+            upstream,
+            baseline;
+            registered=registered,
+        )
+        @test missing == ["1.0.0"]
+        @test latest_per_breaking_version(missing) == ["1.0.0"]
+    finally
+        rm(baseline; force=true)
+    end
+end
+
+@testset "list_missing_versions keeps unregistered series latest" begin
+    baseline = tempname()
+    write(baseline, """{"versions": {"aws_c_io_jll": "0.26.3"}}""")
+    try
+        upstream = ["0.27.5", "0.27.6", "1.0.0"]
+        registered = ["0.26.3"]
+
+        missing = list_missing_versions(
+            "aws_c_io_jll",
+            upstream,
+            baseline;
+            registered=registered,
+        )
+        @test missing == ["0.27.5", "0.27.6", "1.0.0"]
+        @test latest_per_breaking_version(missing) == ["0.27.6", "1.0.0"]
+    finally
+        rm(baseline; force=true)
+    end
+end
+
 @testset "read_manifest_direct_versions" begin
     manifest = joinpath(@__DIR__, "fixtures", "sample-Manifest.toml")
     versions = read_manifest_direct_versions(

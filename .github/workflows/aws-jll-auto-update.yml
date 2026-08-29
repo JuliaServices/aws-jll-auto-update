@@ -387,7 +387,7 @@ jobs:
           exit 1
         fi
 
-        git commit -m "[$LIBRARY] Update to ${TARGET_VERSION} with compatible dependency versions"
+        git commit -m "[$LIBRARY] Update to ${TARGET_VERSION}"
 
         # Rewrite any pre-existing fork branch so the PR is based on current upstream.
         REMOTE_SHA=$(git ls-remote --heads https://github.com/quinnj2/Yggdrasil.git \

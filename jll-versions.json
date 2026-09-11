@@ -4,7 +4,7 @@
     "s2n_tls_jll": "1.7.9",
     "aws_c_compression_jll": "1.0.0",
     "aws_checksums_jll": "1.0.0",
-    "aws_c_s3_jll": "1.0.0",
+    "aws_c_s3_jll": "1.1.1",
     "aws_c_http_jq_jll": "0.10.13",
     "aws_lc_jll": "5.8.0",
     "aws_c_mqtt_jll": "1.0.0",
@@ -16,5 +16,5 @@
     "aws_c_common_jll": "1.0.0",
     "aws_c_auth_jll": "1.0.0"
   },
-  "last_updated": "2026-09-09T18:30:54.491"
+  "last_updated": "2026-09-11T02:00:53.319"
 }

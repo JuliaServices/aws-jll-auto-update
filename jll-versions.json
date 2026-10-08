@@ -13,8 +13,8 @@
     "aws_c_sdkutils_jll": "1.0.0",
     "aws_c_http_jll": "1.0.0",
     "aws_c_io_jll": "1.0.0",
-    "aws_c_common_jll": "1.0.2",
+    "aws_c_common_jll": "1.0.3",
     "aws_c_auth_jll": "1.0.0"
   },
-  "last_updated": "2026-10-06T03:49:42.127"
+  "last_updated": "2026-10-08T03:18:28.163"
 }

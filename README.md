@@ -1,6 +1,8 @@
 # AWS JLL Auto-Update
 
-This repository contains GitHub Actions workflows and utilities for automatically updating AWS CRT library JLL packages in the Julia ecosystem.
+This repository contains GitHub Actions workflows and utilities for tracking and preparing updates to AWS CRT library JLL packages in the Julia ecosystem.
+
+The scheduled workflow updates the versions cache using GitHub's repository-scoped Actions token. Automatic recipe updates, fork synchronization, branch cleanup, and Yggdrasil PR publication are disabled. Recipe updates can still be prepared manually with the utilities below.
 
 ## Strategy
 
@@ -47,7 +49,7 @@ Upstream tags at or below the baseline are ignored. Only newer tags missing from
 A Julia utility script that:
 - Updates the versions cache
 - Parses `build_tarballs.jl` files and updates dependency compat pins via a temporary `Pkg.add` resolve
-- Reports dependencies held back from latest known (for Yggdrasil PR bodies)
+- Reports dependencies held back from latest known (for manually prepared Yggdrasil PR bodies)
 - Computes coverage targets: latest release per missing breaking-compat series above the baseline
 - Audits / clamps cache and baseline versions that are missing from General
 
@@ -66,11 +68,7 @@ julia jll-version-manager.jl fix-versions                    # Clamp phantoms (s
 The workflow:
 1. Fetches upstream `v*` tags for each AWS library
 2. Selects coverage targets: for each missing breaking series (Julia SemVer: major for ≥1.0, minor for 0.x), keep only the latest version; then take the oldest such target
-3. When that target differs from the Yggdrasil recipe (including when the recipe is **ahead** of the gap):
-   - Updates `jll-versions.json` to the target
-   - Rewrites that library's `build_tarballs.jl` to the target version/SHA
-   - Resolves runtime dependency pins with Pkg and writes them into the recipe
-   - Opens a Yggdrasil PR (or refreshes the existing PR), including a dependency-pins / held-back section in the body
+3. When that target differs from the Yggdrasil recipe (including when the recipe is **ahead** of the gap), updates `jll-versions.json` to the target
 4. If coverage is complete and the recipe version is artificially above all upstream tags, only updates `jll-versions.json`
 
 ## Benefits
@@ -86,6 +84,6 @@ The workflow:
 When missing upstream versions are `4.0.0, 5.0.0, …, 5.6.0`:
 
 - Coverage targets collapse to `4.0.0, 5.6.0`
-- First PR targets `4.0.0`; after that is registered, the next run targets `5.6.0`
+- First recipe update should target `4.0.0`; after that is registered, the next run targets `5.6.0`
 
 For `0.x` packages (e.g. `aws_c_common` with gaps `0.12.7`, `0.12.8`, `0.13.0`, `0.13.1`, `0.14.5`), targets are `0.12.8, 0.13.1, 0.14.5` — one per minor series.

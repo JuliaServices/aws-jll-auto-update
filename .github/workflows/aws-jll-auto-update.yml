@@ -1,4 +1,4 @@
-name: Sync and Update AWS Libraries
+name: Update AWS JLL Versions Cache
 
 on:
   schedule:
@@ -11,10 +11,13 @@ on:
         type: string
         default: ''
       yggdrasil_repo:
-        description: 'Base Yggdrasil repo to open PRs against (owner/Yggdrasil).'
+        description: 'Yggdrasil repo to compare versions against (owner/Yggdrasil).'
         required: false
         type: string
         default: 'JuliaPackaging/Yggdrasil'
+
+permissions:
+  contents: read
 
 jobs:
   select-libraries:
@@ -40,7 +43,7 @@ jobs:
 
       - id: yggdrasil
         env:
-          GH_TOKEN: ${{ secrets.PAT }}
+          GH_TOKEN: ${{ github.token }}
           YGGDRASIL_REPO: ${{ inputs.yggdrasil_repo }}
         run: |
           YGGDRASIL_REPO="${YGGDRASIL_REPO#"${YGGDRASIL_REPO%%[![:space:]]*}"}"
@@ -66,65 +69,11 @@ jobs:
           echo "yggdrasil_repo=$YGGDRASIL_REPO" >> "$GITHUB_OUTPUT"
           echo "yggdrasil_base=$YGGDRASIL_BASE" >> "$GITHUB_OUTPUT"
 
-  cleanup-merged-branches:
-    needs: select-libraries
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ secrets.PAT }}
-      YGGDRASIL_REPO: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
-    steps:
-      - name: Delete merged update-versions branches on quinnj2/Yggdrasil
-        run: |
-          set -euo pipefail
-
-          mapfile -t BRANCHES < <(
-            git ls-remote --heads https://github.com/quinnj2/Yggdrasil.git \
-              'refs/heads/update-versions-*' \
-              | awk '{ sub(/^refs\/heads\//, "", $2); print $2 }' \
-              | sort -u
-          )
-
-          if [[ ${#BRANCHES[@]} -eq 0 ]]; then
-            echo "No update-versions-* branches found on quinnj2/Yggdrasil"
-            exit 0
-          fi
-
-          echo "Checking ${#BRANCHES[@]} update-versions-* branch(es) for merged PRs against $YGGDRASIL_REPO"
-          for BRANCH in "${BRANCHES[@]}"; do
-            if [[ ! "$BRANCH" =~ ^update-versions- ]]; then
-              echo "Skipping unexpected ref name: $BRANCH"
-              continue
-            fi
-
-            # Use the REST pulls API with an explicit GET. `gh api -f` without
-            # -X GET POSTs to create a PR (and 422s on missing base). Also,
-            # `gh pr list --state merged` uses Search where head:owner:branch
-            # matches nothing; REST wants owner:branch.
-            MERGED_PR=$(gh api -X GET "repos/${YGGDRASIL_REPO}/pulls" \
-              -f state=closed \
-              -f head="quinnj2:${BRANCH}" \
-              --jq '[.[] | select(.merged_at != null) | .html_url] | first // empty')
-
-            if [[ -z "$MERGED_PR" ]]; then
-              echo "Keeping $BRANCH (no merged PR)"
-              continue
-            fi
-
-            echo "Deleting $BRANCH (merged PR: $MERGED_PR)"
-            if DELETE_ERR=$(gh api -X DELETE "repos/quinnj2/Yggdrasil/git/refs/heads/${BRANCH}" 2>&1); then
-              echo "Deleted $BRANCH"
-            elif [[ "$DELETE_ERR" == *"Not Found"* ]] || [[ "$DELETE_ERR" == *"Reference does not exist"* ]]; then
-              echo "Branch $BRANCH already absent; continuing"
-            else
-              echo "Unexpected error deleting $BRANCH:"
-              echo "$DELETE_ERR"
-              exit 1
-            fi
-          done
-
   update-library:
     needs: select-libraries
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       max-parallel: 1  # Run jobs one at a time to avoid conflicts
@@ -137,7 +86,8 @@ jobs:
       with:
         ref: ${{ needs.select-libraries.outputs.yggdrasil_base }}
         repository: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
-        token: ${{ secrets.PAT }}
+        persist-credentials: false
+        token: ${{ github.token }}
 
     - name: Setup Julia
       uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
@@ -149,7 +99,7 @@ jobs:
       with:
         repository: JuliaServices/aws-jll-auto-update
         path: jll-dir
-        token: ${{ secrets.PAT }}
+        token: ${{ github.token }}
         ref: main
 
     - name: compute full repo name
@@ -168,10 +118,10 @@ jobs:
 
     - name: Compute coverage target from upstream tags
       env:
-        GITHUB_TOKEN: ${{ secrets.PAT }}
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
         LIBRARY=${{ matrix.library }}
-        RELEASES=$(curl --retry 5 -L -H "Authorization: token ${{ secrets.PAT }}" \
+        RELEASES=$(curl --retry 5 -L -H "Authorization: Bearer ${GITHUB_TOKEN}" \
           "https://api.github.com/repos/${{ env.REPO }}/git/refs/tags")
         echo "$RELEASES" | jq -r '.[] | select(.ref | test("refs/tags/v")) | .ref' \
           | sed 's|refs/tags/v||' | sort -V > /tmp/upstream-versions.txt
@@ -193,26 +143,18 @@ jobs:
         TARGET_VERSION=$(echo "$TARGET_VERSION" | tr -d '[:space:]')
 
         ARTIFICIAL_BUMP=false
-        NEED_YGGDRASIL_UPDATE=false
+        NEED_CACHE_UPDATE=false
 
         if [[ -n "$TARGET_VERSION" ]]; then
-          TARGET_SHA=$(echo "$RELEASES" | jq -r --arg tag "refs/tags/v${TARGET_VERSION}" \
-            '.[] | select(.ref == $tag) | .object.sha')
-          if [[ -z "$TARGET_SHA" || "$TARGET_SHA" == "null" ]]; then
-            echo "Could not resolve SHA for tag v${TARGET_VERSION}"
-            exit 1
-          fi
           echo "TARGET_VERSION=${TARGET_VERSION}" >> $GITHUB_ENV
-          echo "TARGET_SHA=${TARGET_SHA}" >> $GITHUB_ENV
-          echo "Coverage target: TARGET_VERSION=$TARGET_VERSION TARGET_SHA=$TARGET_SHA"
+          echo "Coverage target: TARGET_VERSION=$TARGET_VERSION"
         else
           echo "TARGET_VERSION=" >> $GITHUB_ENV
-          echo "TARGET_SHA=" >> $GITHUB_ENV
           echo "No missing upstream versions above coverage baseline"
         fi
 
         echo "ARTIFICIAL_BUMP=${ARTIFICIAL_BUMP}" >> $GITHUB_ENV
-        echo "NEED_YGGDRASIL_UPDATE=${NEED_YGGDRASIL_UPDATE}" >> $GITHUB_ENV
+        echo "NEED_CACHE_UPDATE=${NEED_CACHE_UPDATE}" >> $GITHUB_ENV
 
     - name: Parse current version and decide update action
       run: |
@@ -221,16 +163,6 @@ jobs:
         CURRENT_VERSION=$(grep -oP -m 1 '(?<=version = v")[^"]+' $LIBRARY_DIR/build_tarballs.jl | sed 's/^v//')
         echo "CURRENT_VERSION=${CURRENT_VERSION}" >> $GITHUB_ENV
         echo "CURRENT_VERSION=${CURRENT_VERSION}"
-
-        # GitSource may use awslabs/aws-lc even when tags are fetched from aws/aws-lc
-        SOURCE_REPO="${{ env.REPO }}"
-        if [[ "$LIBRARY" == "aws_lc" ]]; then
-          SOURCE_REPO="awslabs/aws-lc"
-        fi
-        CURRENT_SHA=$(grep -oP -m 1 '(?<=GitSource\("https://github.com/'${SOURCE_REPO//\//\\/}'.git", ")[a-f0-9]{40}' $LIBRARY_DIR/build_tarballs.jl)
-        echo "CURRENT_SHA=${CURRENT_SHA}" >> $GITHUB_ENV
-        echo "CURRENT_SHA=${CURRENT_SHA}"
-        echo "SOURCE_REPO=${SOURCE_REPO}" >> $GITHUB_ENV
 
         version_gt() {
           if [[ "$1" == "$2" ]]; then
@@ -242,15 +174,15 @@ jobs:
         }
 
         ARTIFICIAL_BUMP=false
-        NEED_YGGDRASIL_UPDATE=false
+        NEED_CACHE_UPDATE=false
 
         if [[ -n "${TARGET_VERSION}" ]]; then
           if [[ "$CURRENT_VERSION" != "$TARGET_VERSION" ]]; then
-            NEED_YGGDRASIL_UPDATE=true
+            NEED_CACHE_UPDATE=true
             if version_gt "$CURRENT_VERSION" "$TARGET_VERSION"; then
-              echo "Yggdrasil recipe ($CURRENT_VERSION) is ahead of coverage gap $TARGET_VERSION; will backfill"
+              echo "Yggdrasil recipe ($CURRENT_VERSION) is ahead of coverage gap $TARGET_VERSION; tracking the gap in the cache"
             else
-              echo "Will update Yggdrasil from $CURRENT_VERSION to coverage target $TARGET_VERSION"
+              echo "Will update the cache to coverage target $TARGET_VERSION (Yggdrasil recipe: $CURRENT_VERSION)"
             fi
           else
             echo "Yggdrasil recipe already at coverage target $TARGET_VERSION; waiting for register"
@@ -258,66 +190,18 @@ jobs:
         elif version_gt "$CURRENT_VERSION" "$MAX_UPSTREAM_VERSION"; then
           ARTIFICIAL_BUMP=true
           echo "Coverage complete and current version ${CURRENT_VERSION} is greater than max upstream ${MAX_UPSTREAM_VERSION}. Artificial bump case."
-          echo "Will update jll-versions.json with current version ${CURRENT_VERSION} but skip Yggdrasil updates"
+          echo "Will update jll-versions.json with current version ${CURRENT_VERSION}"
         else
-          echo "Coverage complete; no Yggdrasil update needed"
+          echo "Coverage complete; no cache update needed"
         fi
 
         echo "ARTIFICIAL_BUMP=${ARTIFICIAL_BUMP}" >> $GITHUB_ENV
-        echo "NEED_YGGDRASIL_UPDATE=${NEED_YGGDRASIL_UPDATE}" >> $GITHUB_ENV
-
-    - name: Check for existing Yggdrasil PRs for this JLL
-      if: env.NEED_YGGDRASIL_UPDATE == 'true'
-      env:
-        GH_TOKEN: ${{ secrets.PAT }}
-        YGGDRASIL_REPO: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
-      run: |
-        LIBRARY=${{ matrix.library }}
-        BRANCH_NAME="update-versions-${LIBRARY}-${TARGET_VERSION}"
-        EXISTING_PRS=$(gh pr list --repo "$YGGDRASIL_REPO" --state open \
-          --search "[${LIBRARY}] Update to version in:title" \
-          --limit 100 \
-          --json title,url,headRefName \
-          | jq --arg prefix "update-versions-${LIBRARY}-" \
-          '[.[] | select(.headRefName | startswith($prefix))]')
-
-        CONFLICTING_PRS=$(echo "$EXISTING_PRS" \
-          | jq --arg branch "$BRANCH_NAME" '[.[] | select(.headRefName != $branch)]')
-        if [[ "$CONFLICTING_PRS" != "[]" ]]; then
-          echo "Open Yggdrasil PR(s) exist for a different ${LIBRARY} version; refusing to create another:"
-          echo "$CONFLICTING_PRS" | jq -r '.[] | "- \(.title) (\(.headRefName)): \(.url)"'
-          exit 1
-        fi
-
-        SAME_TARGET_PR=$(echo "$EXISTING_PRS" \
-          | jq --arg branch "$BRANCH_NAME" '[.[] | select(.headRefName == $branch)]')
-        if [[ "$SAME_TARGET_PR" != "[]" ]]; then
-          echo "Existing PR targets ${LIBRARY} ${TARGET_VERSION}; its branch will be refreshed if needed:"
-          echo "$SAME_TARGET_PR" | jq -r '.[] | "- \(.title) (\(.headRefName)): \(.url)"'
-        fi
-
-    - name: Sync quinnj2 Yggdrasil fork with upstream
-      if: env.NEED_YGGDRASIL_UPDATE == 'true'
-      env:
-        GH_TOKEN: ${{ secrets.PAT }}
-        YGGDRASIL_REPO: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
-        YGGDRASIL_BASE: ${{ needs.select-libraries.outputs.yggdrasil_base }}
-      run: |
-        set -euo pipefail
-        if [[ "${YGGDRASIL_REPO,,}" == "quinnj2/yggdrasil" ]]; then
-          echo "quinnj2/Yggdrasil is the selected upstream; no fork sync needed"
-          exit 0
-        fi
-
-        echo "Syncing quinnj2/Yggdrasil from ${YGGDRASIL_REPO}:${YGGDRASIL_BASE}"
-        gh repo sync quinnj2/Yggdrasil \
-          --source "$YGGDRASIL_REPO" \
-          --branch "$YGGDRASIL_BASE"
+        echo "NEED_CACHE_UPDATE=${NEED_CACHE_UPDATE}" >> $GITHUB_ENV
 
     - name: Update JLL versions cache
-      if: env.NEED_YGGDRASIL_UPDATE == 'true' || env.ARTIFICIAL_BUMP == 'true'
+      if: env.NEED_CACHE_UPDATE == 'true' || env.ARTIFICIAL_BUMP == 'true'
       env:
-        GITHUB_TOKEN: ${{ secrets.PAT }}
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
         LIBRARY=${{ matrix.library }}
 
@@ -345,110 +229,3 @@ jobs:
         fi
         # coverage-baseline.json is intentionally not updated
         cd ..
-
-    - name: Compare versions and update Yggdrasil if necessary
-      if: env.NEED_YGGDRASIL_UPDATE == 'true'
-      env:
-        GITHUB_TOKEN: ${{ secrets.PAT }}
-        YGGDRASIL_BASE: ${{ needs.select-libraries.outputs.yggdrasil_base }}
-      run: |
-        set -euo pipefail
-        LIBRARY=${{ matrix.library }}
-        LIBRARY_DIR=$(echo "${LIBRARY:0:1}" | tr '[:lower:]' '[:upper:]')/${LIBRARY}
-        BRANCH_NAME="update-versions-$LIBRARY-${TARGET_VERSION}"
-
-        # Update version and SHA (supports both upgrades and backfill downgrades)
-        sed -i "s/version = v\"${CURRENT_VERSION}\"/version = v\"${TARGET_VERSION}\"/" $LIBRARY_DIR/build_tarballs.jl
-        sed -i "s#${CURRENT_SHA}#${TARGET_SHA}#" $LIBRARY_DIR/build_tarballs.jl
-
-        echo "Updating dependencies for $LIBRARY to mutually compatible versions..."
-        DEP_PINS_REPORT="${RUNNER_TEMP}/dep-pins-report-${LIBRARY}.md"
-        julia --project=jll-dir jll-dir/jll-version-manager.jl update-deps \
-          "$LIBRARY_DIR/build_tarballs.jl" jll-dir/jll-versions.json "$DEP_PINS_REPORT"
-        echo "DEP_PINS_REPORT=${DEP_PINS_REPORT}" >> "$GITHUB_ENV"
-
-        # Save the desired recipe, then rebuild the PR branch from the current
-        # upstream base. gh repo sync only updates the fork's default branch;
-        # reusing a stale feature branch left PRs hundreds of commits behind.
-        DESIRED_RECIPE=$(mktemp)
-        cp "$LIBRARY_DIR/build_tarballs.jl" "$DESIRED_RECIPE"
-        git restore "$LIBRARY_DIR/build_tarballs.jl"
-
-        git config --global user.name 'github-actions'
-        git config --global user.email 'github-actions@github.com'
-
-        git fetch --depth=1 origin "$YGGDRASIL_BASE"
-        git checkout -B "$BRANCH_NAME" "origin/$YGGDRASIL_BASE"
-
-        cp "$DESIRED_RECIPE" "$LIBRARY_DIR/build_tarballs.jl"
-        git add "$LIBRARY_DIR/build_tarballs.jl"
-        if git diff --cached --quiet; then
-          echo "Unexpected: coverage target recipe matches $YGGDRASIL_BASE tip"
-          exit 1
-        fi
-
-        git commit -m "[$LIBRARY] Update to ${TARGET_VERSION}"
-
-        # Rewrite any pre-existing fork branch so the PR is based on current upstream.
-        REMOTE_SHA=$(git ls-remote --heads https://github.com/quinnj2/Yggdrasil.git \
-          "refs/heads/$BRANCH_NAME" | awk '{print $1}')
-        if [[ -n "$REMOTE_SHA" ]]; then
-          git push --force-with-lease="refs/heads/$BRANCH_NAME:$REMOTE_SHA" \
-            https://github.com/quinnj2/Yggdrasil "HEAD:refs/heads/$BRANCH_NAME"
-        else
-          git push https://github.com/quinnj2/Yggdrasil "HEAD:refs/heads/$BRANCH_NAME"
-        fi
-        echo "BRANCH_READY=true" >> "$GITHUB_ENV"
-
-    - name: Checkout fork
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      if: env.NEED_YGGDRASIL_UPDATE == 'true' && env.BRANCH_READY == 'true'
-      with:
-        ref: update-versions-${{ matrix.library }}-${{ env.TARGET_VERSION }}
-        repository: quinnj2/Yggdrasil
-        token: ${{ secrets.PAT }}
-
-    - name: Create or reuse PR
-      if: env.NEED_YGGDRASIL_UPDATE == 'true' && env.BRANCH_READY == 'true'
-      env:
-        GH_TOKEN: ${{ secrets.PAT }}
-        YGGDRASIL_REPO: ${{ needs.select-libraries.outputs.yggdrasil_repo }}
-        YGGDRASIL_BASE: ${{ needs.select-libraries.outputs.yggdrasil_base }}
-      run: |
-        BRANCH_NAME="update-versions-${{ matrix.library }}-${TARGET_VERSION}"
-        LIBRARY=${{ matrix.library }}
-
-        DEP_PINS_SECTION=""
-        if [[ -n "${DEP_PINS_REPORT:-}" && -f "$DEP_PINS_REPORT" ]]; then
-          DEP_PINS_SECTION=$(cat "$DEP_PINS_REPORT")
-        fi
-
-        PR_BODY=$(printf 'This PR updates %s to version %s.\n\n%s\n\ncc: @Octogonapus' \
-          "$LIBRARY" "$TARGET_VERSION" "$DEP_PINS_SECTION")
-
-        # Use REST, not `gh pr list --json headRepositoryOwner`. That GraphQL
-        # field requests Organization name/slug and needs read:org; this PAT
-        # does not have it. Same for `gh pr edit` (known to require read:org).
-        EXISTING_PR_META=$(gh api -X GET "repos/${YGGDRASIL_REPO}/pulls" \
-          -f state=open \
-          -f head="quinnj2:${BRANCH_NAME}" \
-          -f base="$YGGDRASIL_BASE" \
-          --jq 'if length > 0 then "\(.[0].number)\t\(.[0].html_url)" else empty end')
-
-        if [[ -n "$EXISTING_PR_META" ]]; then
-          PR_NUMBER="${EXISTING_PR_META%%$'\t'*}"
-          EXISTING_PR="${EXISTING_PR_META#*$'\t'}"
-          jq -n --arg body "$PR_BODY" '{body: $body}' \
-            | gh api -X PATCH "repos/${YGGDRASIL_REPO}/pulls/${PR_NUMBER}" --input - >/dev/null
-          echo "Updated existing PR: $EXISTING_PR"
-          exit 0
-        fi
-
-        NEW_PR=$(jq -n \
-          --arg title "[${LIBRARY}] Update to version ${TARGET_VERSION}" \
-          --arg body "$PR_BODY" \
-          --arg head "quinnj2:${BRANCH_NAME}" \
-          --arg base "$YGGDRASIL_BASE" \
-          '{title: $title, body: $body, head: $head, base: $base}' \
-          | gh api -X POST "repos/${YGGDRASIL_REPO}/pulls" --input - --jq '.html_url')
-        echo "Created PR: $NEW_PR"
